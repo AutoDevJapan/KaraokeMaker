@@ -2,6 +2,7 @@ use crate::{
     Progress,
     media::{self, Options, Tools},
     model,
+    presentation::{VideoPreset, VisualStyle},
     web::{self, App},
 };
 use anyhow::{Context, Result};
@@ -36,6 +37,27 @@ enum Mode {
         tempo: f64,
         #[arg(long)]
         lyrics: Option<PathBuf>,
+        #[arg(long)]
+        background: bool,
+        #[arg(long, value_enum, default_value_t = VideoPreset::Hd)]
+        preset: VideoPreset,
+        /// JSON with background/accent RGB colors and an installed font name.
+        #[arg(long)]
+        style: Option<PathBuf>,
+    },
+    /// 指定した音源に歌詞を付けます（音源分離なし）。
+    Render {
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        lyrics: PathBuf,
+        #[arg(long, value_enum, default_value_t = VideoPreset::FullHd)]
+        preset: VideoPreset,
+        #[arg(long)]
+        style: Option<PathBuf>,
         #[arg(long)]
         background: bool,
     },
@@ -94,6 +116,8 @@ fn run() -> Result<()> {
             tempo,
             lyrics,
             background,
+            preset,
+            style,
         } => {
             fs::create_dir_all(&output)?;
             let dir = output.join(uuid::Uuid::new_v4().to_string());
@@ -107,6 +131,8 @@ fn run() -> Result<()> {
                     .transpose()?
                     .unwrap_or_default(),
                 original_video: !background,
+                preset,
+                style: read_style(style)?,
             };
             media::convert(
                 &input,
@@ -115,6 +141,30 @@ fn run() -> Result<()> {
                 &options,
                 &Progress::default(),
             )?;
+            println!("{}", dir.canonicalize()?.display());
+        }
+        Mode::Render {
+            input,
+            output,
+            title,
+            lyrics,
+            preset,
+            style,
+            background,
+        } => {
+            let options = Options {
+                title,
+                lyrics: fs::read_to_string(lyrics)?,
+                original_video: !background,
+                preset,
+                style: read_style(style)?,
+                ..Options::default()
+            };
+            options.validate()?;
+            fs::create_dir_all(&output)?;
+            let dir = output.join(uuid::Uuid::new_v4().to_string());
+            fs::create_dir(&dir)?;
+            media::render(&input, &dir, &options, &Progress::default())?;
             println!("{}", dir.canonicalize()?.display());
         }
         Mode::Serve { port, no_open } => {
@@ -182,6 +232,14 @@ fn run() -> Result<()> {
     }
     Ok(())
 }
+fn read_style(path: Option<PathBuf>) -> Result<VisualStyle> {
+    let style = path
+        .map(|p| -> Result<VisualStyle> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
+        .transpose()?
+        .unwrap_or_default();
+    style.validate()?;
+    Ok(style)
+}
 #[cfg(windows)]
 fn show_error(message: &str) {
     #[link(name = "user32")]
@@ -193,9 +251,13 @@ fn show_error(message: &str) {
             kind: u32,
         ) -> i32;
     }
-    if std::env::args()
-        .any(|arg| arg == "--no-open" || arg == "convert" || arg == "fetch-model" || arg == "check")
-    {
+    if std::env::args().any(|arg| {
+        arg == "--no-open"
+            || arg == "convert"
+            || arg == "render"
+            || arg == "fetch-model"
+            || arg == "check"
+    }) {
         return;
     }
     let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();

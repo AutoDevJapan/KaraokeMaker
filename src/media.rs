@@ -1,3 +1,4 @@
+use crate::presentation::{VideoPreset, VisualStyle};
 use crate::{Progress, lyrics};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,10 @@ pub struct Options {
     pub tempo: f64,
     pub lyrics: String,
     pub original_video: bool,
+    #[serde(default)]
+    pub preset: VideoPreset,
+    #[serde(default)]
+    pub style: VisualStyle,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -28,6 +33,8 @@ impl Default for Options {
             tempo: 1.0,
             lyrics: String::new(),
             original_video: true,
+            preset: VideoPreset::default(),
+            style: VisualStyle::default(),
         }
     }
 }
@@ -46,6 +53,7 @@ impl Options {
             "速度は0.5から1.5の間にしてください。"
         );
         lyrics::parse_lrc(&self.lyrics)?;
+        self.style.validate()?;
         Ok(())
     }
 }
@@ -301,8 +309,20 @@ pub fn export(
         );
     }
     let cues = lyrics::parse_lrc(&options.lyrics)?;
-    let ass = lyrics::make_ass(&options.title, &cues, duration, options.tempo)?;
+    let ass = lyrics::make_ass_styled(
+        &options.title,
+        &cues,
+        duration,
+        options.tempo,
+        options.preset,
+        &options.style,
+    )?;
     fs::write(dir.join("lyrics.ass"), ass)?;
+    fs::write(
+        dir.join("lyrics.srt"),
+        lyrics::make_srt(&cues, duration, options.tempo)?,
+    )?;
+    fs::write(dir.join("lyrics.lrc"), &options.lyrics)?;
     let pitch = 2.0_f64.powf(options.key as f64 / 12.0);
     run(
         tools,
@@ -337,6 +357,9 @@ pub fn export(
     )?;
     progress.set("カラオケ映像を作っています。");
     let mut args = Vec::<String>::new();
+    let (width, height) = options.preset.dimensions();
+    let (crf, maxrate, bufsize) = options.preset.encoding();
+    let background = &options.style.background;
     if source.video && options.original_video {
         args.extend([
             "-protocol_whitelist".into(),
@@ -349,7 +372,7 @@ pub fn export(
             "-f".into(),
             "lavfi".into(),
             "-i".into(),
-            "color=c=0x142e27:s=1280x720:r=30".into(),
+            format!("color=c=0x{background}:s={width}x{height}:r=30"),
         ]);
     }
     let video_map = if source.video && options.original_video {
@@ -360,9 +383,11 @@ pub fn export(
     args.extend([
         "-i".into(), "karaoke.wav".into(), "-map".into(), video_map,
         "-map".into(), "1:a:0".into(), "-vf".into(),
-        format!("setpts=PTS/{},scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=0x142e27,setsar=1,tpad=stop_mode=clone:stop_duration=1800,ass=lyrics.ass",options.tempo),
+        format!("setpts=PTS/{},scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{background},setsar=1,tpad=stop_mode=clone:stop_duration=1800,ass=lyrics.ass",options.tempo),
         "-c:v".into(), "libx264".into(), "-preset".into(), "fast".into(),
-        "-crf".into(), "20".into(), "-pix_fmt".into(), "yuv420p".into(),
+        "-crf".into(), crf.to_string(), "-maxrate".into(), maxrate.into(),
+        "-bufsize".into(), bufsize.into(), "-pix_fmt".into(), "yuv420p".into(),
+        "-r".into(), "30".into(),
         "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(),
         "-t".into(), format!("{:.6}",duration/options.tempo),
         "-movflags".into(), "+faststart".into(), "karaoke.mp4".into()
@@ -377,12 +402,41 @@ pub fn export(
             && (audio.duration - expected).abs() < 0.25,
         "出力の長さが曲と一致しません。結果を確認してください。"
     );
-    for name in ["karaoke.wav", "karaoke.mp3", "karaoke.mp4", "vocals.wav"] {
+    for name in ["karaoke.wav", "karaoke.mp3", "karaoke.mp4"] {
         ensure!(
             fs::metadata(dir.join(name))?.len() > 44,
             "出力ファイルが空です。"
         );
     }
+    Ok(())
+}
+
+/// Render supplied audio (original mix or approved instrumental) without AI separation.
+/// Inputs remain untouched; the CLI allocates a fresh output directory per revision.
+pub fn render(input: &Path, dir: &Path, options: &Options, progress: &Progress) -> Result<()> {
+    options.validate()?;
+    let input = input
+        .canonicalize()
+        .context("入力ファイルが見つかりません。")?;
+    let dir = dir.canonicalize()?;
+    let tools = Tools::discover();
+    tools.check()?;
+    let source = probe(&tools, &input)?;
+    ensure!(
+        source.duration <= MAX_DURATION,
+        "曲は15分以内にしてください。"
+    );
+    let (left, right) = decode(&tools, &input, &dir, progress)?;
+    let duration = left.len() as f64 / 44100.0;
+    write_stereo(&dir.join("instrumental-raw.wav"), &left, &right)?;
+    export(&tools, &input, &dir, &source, options, duration, progress)?;
+    fs::write(
+        dir.join("settings.json"),
+        serde_json::to_vec_pretty(options)?,
+    )?;
+    fs::remove_file(dir.join("decoded.wav"))?;
+    fs::remove_file(dir.join("instrumental-raw.wav"))?;
+    progress.set("指定した音源で字幕付き映像ができました。");
     Ok(())
 }
 

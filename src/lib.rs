@@ -3,6 +3,7 @@ pub mod lyrics;
 pub mod media;
 pub mod model;
 pub mod music;
+pub mod presentation;
 pub mod suno;
 pub mod web;
 
