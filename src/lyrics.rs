@@ -167,11 +167,14 @@ pub fn make_ass_styled(
     let (width, height) = preset.dimensions();
     let scale = width as f64 / 1280.0;
     let scaled = |value: f64| (value * scale).round() as u32;
-    let (left, right, bottom, top) = if matches!(preset, VideoPreset::Vertical) {
-        (80, 160, 320, 160)
-    } else {
-        (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
-    };
+    let (left, right, bottom, top) =
+        if matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd) {
+            let factor = width as f64 / 1080.0;
+            let safe = |value: f64| (value * factor).round() as u32;
+            (safe(80.0), safe(160.0), safe(320.0), safe(160.0))
+        } else {
+            (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
+        };
     let font = &style.font;
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
