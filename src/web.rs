@@ -444,6 +444,12 @@ async fn receive(app: &App, dir: &Path, multipart: &mut Multipart) -> Result<Opt
                     options.original_video = value == "original";
                 }
                 "lyrics" => options.lyrics = value,
+                "separation" => {
+                    options.separation =
+                        <crate::model::SeparationModel as clap::ValueEnum>::from_str(&value, false)
+                            .map_err(|_| anyhow::anyhow!("分離方法を選んでください。"))?
+                }
+                "automatic_subtitles" => options.automatic_subtitles = value == "true",
                 "preset" => {
                     options.preset =
                         <crate::presentation::VideoPreset as clap::ValueEnum>::from_str(

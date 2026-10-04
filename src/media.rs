@@ -24,6 +24,17 @@ pub struct Options {
     pub preset: VideoPreset,
     #[serde(default)]
     pub style: VisualStyle,
+    #[serde(default)]
+    pub separation: crate::model::SeparationModel,
+    #[serde(default = "legacy_sample_rate")]
+    pub sample_rate: u32,
+    #[serde(default)]
+    pub words: Vec<crate::alignment::Word>,
+    #[serde(default)]
+    pub automatic_subtitles: bool,
+}
+fn legacy_sample_rate() -> u32 {
+    44100
 }
 impl Default for Options {
     fn default() -> Self {
@@ -35,6 +46,10 @@ impl Default for Options {
             original_video: true,
             preset: VideoPreset::default(),
             style: VisualStyle::default(),
+            separation: crate::model::SeparationModel::Standard,
+            sample_rate: 48000,
+            words: Vec::new(),
+            automatic_subtitles: true,
         }
     }
 }
@@ -52,8 +67,18 @@ impl Options {
             self.tempo.is_finite() && (0.5..=1.5).contains(&self.tempo),
             "速度は0.5から1.5の間にしてください。"
         );
-        lyrics::parse_lrc(&self.lyrics)?;
+        ensure!(
+            self.lyrics.len() <= 64 * 1024,
+            "歌詞は64KB以内にしてください。"
+        );
+        if self.lyrics.trim().starts_with('[') || self.lyrics.trim().is_empty() {
+            lyrics::parse_lrc(&self.lyrics)?;
+        }
         self.style.validate()?;
+        ensure!(
+            [44100, 48000].contains(&self.sample_rate),
+            "音声は44.1kHzまたは48kHzにしてください。"
+        );
         Ok(())
     }
 }
@@ -386,7 +411,14 @@ pub fn export(
             "出力先に{name}がすでにあります。別のフォルダを使ってください。"
         );
     }
-    let cues = lyrics::parse_lrc(&options.lyrics)?;
+    let mut cues = if options.words.is_empty() {
+        lyrics::parse_lrc(&options.lyrics)?
+    } else {
+        lyrics::word_cues(&options.words)
+    };
+    if !options.words.is_empty() {
+        cues.retain(|cue| cue.seconds < duration);
+    }
     let ass = lyrics::make_ass_styled(
         &options.title,
         &cues,
@@ -395,12 +427,37 @@ pub fn export(
         options.preset,
         &options.style,
     )?;
+    let ass = if options.words.is_empty() {
+        ass
+    } else {
+        lyrics::make_ass_words(
+            &options.title,
+            &options.words,
+            duration,
+            options.tempo,
+            options.preset,
+            &options.style,
+        )?
+    };
     fs::write(dir.join("lyrics.ass"), ass)?;
     fs::write(
         dir.join("lyrics.srt"),
         lyrics::make_srt(&cues, duration, options.tempo)?,
     )?;
-    fs::write(dir.join("lyrics.lrc"), &options.lyrics)?;
+    fs::write(
+        dir.join("lyrics.lrc"),
+        if options.words.is_empty() {
+            options.lyrics.clone()
+        } else {
+            lyrics::to_lrc(&cues)
+        },
+    )?;
+    if !options.words.is_empty() {
+        fs::write(
+            dir.join("words.json"),
+            serde_json::to_vec_pretty(&options.words)?,
+        )?;
+    }
     let pitch = 2.0_f64.powf(options.key as f64 / 12.0);
     run(
         tools,
@@ -415,6 +472,8 @@ pub fn export(
             ),
             "-c:a".into(),
             "pcm_s24le".into(),
+            "-ar".into(),
+            options.sample_rate.to_string(),
             "karaoke.wav".into(),
         ],
         progress,
@@ -467,7 +526,7 @@ pub fn export(
         "-crf".into(), crf.to_string(), "-maxrate".into(), maxrate.into(),
         "-bufsize".into(), bufsize.into(), "-pix_fmt".into(), "yuv420p".into(),
         "-r".into(), "30".into(),
-        "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(),
+        "-c:a".into(), "aac".into(), "-b:a".into(), "384k".into(),
         "-t".into(), format!("{:.6}",duration/options.tempo),
         "-movflags".into(), "+faststart".into(), "karaoke.mp4".into()
     ]);
@@ -586,29 +645,62 @@ pub fn convert(
     let (left, right) = decode(&tools, &input, &dir, progress)?;
     let duration = left.len() as f64 / 44100.0;
     // Validate timestamps before spending time on inference.
-    lyrics::make_ass(
-        &options.title,
-        &lyrics::parse_lrc(&options.lyrics)?,
-        duration,
-        options.tempo,
-    )?;
+    if options.lyrics.trim().starts_with('[') || options.lyrics.trim().is_empty() {
+        lyrics::make_ass(
+            &options.title,
+            &lyrics::parse_lrc(&options.lyrics)?,
+            duration,
+            options.tempo,
+        )?;
+    }
     progress.set("歌声と伴奏を分離しています。初回はモデルを取得します。");
-    let stems = crate::model::separate(&left, &right, cache, progress)?;
-    write_stereo(
-        &dir.join("instrumental-raw.wav"),
-        &stems.instrumental_left,
-        &stems.instrumental_right,
-    )?;
+    let stems = crate::model::separate_using(&left, &right, cache, options.separation, progress)?;
     write_stereo(
         &dir.join("vocals.wav"),
         &stems.vocals_left,
         &stems.vocals_right,
     )?;
+    if matches!(
+        options.separation,
+        crate::model::SeparationModel::MelBand
+            | crate::model::SeparationModel::MelBandFp16
+            | crate::model::SeparationModel::FineTunedResidual
+    ) {
+        run(&tools, &dir, &[
+            "-protocol_whitelist".into(),"file,pipe".into(),"-i".into(),input.display().to_string(),
+            "-i".into(),"vocals.wav".into(),"-filter_complex".into(),
+            "[0:a:0]aresample=48000:async=1:first_pts=0[a];[1:a:0]aresample=48000[v];[a][v]amix=inputs=2:weights='1 -1':normalize=0:duration=first".into(),
+            "-vn".into(),"-ac".into(),"2".into(),"-c:a".into(),"pcm_f32le".into(),"instrumental-raw.wav".into(),
+        ],progress)?;
+    } else {
+        write_stereo(
+            &dir.join("instrumental-raw.wav"),
+            &stems.instrumental_left,
+            &stems.instrumental_right,
+        )?;
+    }
+    let mut effective = options.clone();
+    if effective.words.is_empty()
+        && ((!effective.lyrics.trim().is_empty() && !effective.lyrics.trim().starts_with('['))
+            || (effective.automatic_subtitles && effective.lyrics.trim().is_empty()))
+    {
+        effective.words = crate::alignment::prepare(
+            &dir.join("vocals.wav"),
+            &dir,
+            &effective.lyrics,
+            duration,
+            progress,
+        )?;
+        effective.lyrics = lyrics::to_lrc(&lyrics::word_cues(&effective.words));
+        effective.automatic_subtitles = false;
+    }
     progress.set("キーと速度を調整しています。");
-    export(&tools, &input, &dir, &source, options, duration, progress)?;
+    export(
+        &tools, &input, &dir, &source, &effective, duration, progress,
+    )?;
     fs::write(
         dir.join("settings.json"),
-        serde_json::to_vec_pretty(options)?,
+        serde_json::to_vec_pretty(&effective)?,
     )?;
     for name in ["decoded.wav", "instrumental-raw.wav"] {
         if let Err(error) = fs::remove_file(dir.join(name)) {

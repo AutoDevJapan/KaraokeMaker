@@ -125,6 +125,126 @@ fn stamp(seconds: f64) -> String {
     )
 }
 
+pub fn make_ass_words(
+    title: &str,
+    words: &[crate::alignment::Word],
+    duration: f64,
+    tempo: f64,
+    preset: VideoPreset,
+    style: &VisualStyle,
+) -> Result<String> {
+    ensure!(
+        !words.is_empty() && words.len() <= 10000,
+        "単語の時刻が空か多すぎます。"
+    );
+    let mut previous = 0.0;
+    for word in words {
+        ensure!(
+            word.start.is_finite()
+                && word.end.is_finite()
+                && word.start >= previous
+                && word.end > word.start
+                && word.end <= duration + 0.1
+                && word.text.len() <= 1024,
+            "単語の時刻か文字数が不正です。"
+        );
+        previous = word.start;
+    }
+    let mut ass = make_ass_styled(title, &[], duration, tempo, preset, style)?;
+    let mut first = 0;
+    while first < words.len() {
+        let mut last = first + 1;
+        let mut count = words[first].text.chars().count();
+        while last < words.len()
+            && words[last].start - words[first].start < 2.5
+            && count + words[last].text.chars().count() < 36
+        {
+            count += words[last].text.chars().count();
+            last += 1;
+        }
+        let start = words[first].start / tempo;
+        let end = words[last - 1].end.min(duration) / tempo;
+        let mut text = String::new();
+        for (n, word) in words[first..last].iter().enumerate() {
+            let next = words[first..last]
+                .get(n + 1)
+                .map_or(word.end, |w| w.start)
+                .max(word.start + 0.01);
+            let fill = ((next - word.start) / tempo * 100.0).round().max(1.0) as u64;
+            let spacing = if word.text.is_ascii() && n > 0 {
+                " "
+            } else {
+                ""
+            };
+            text.push_str(&format!("{spacing}{{\\kf{fill}}}{}", ass_text(&word.text)));
+        }
+        ass.push_str(&format!(
+            "Dialogue: 1,{},{},Lyrics,,0,0,0,,{text}\n",
+            stamp(start),
+            stamp(end)
+        ));
+        first = last;
+    }
+    Ok(ass)
+}
+
+pub fn word_cues(words: &[crate::alignment::Word]) -> Vec<Cue> {
+    let mut cues = Vec::new();
+    let mut first = 0;
+    while first < words.len() {
+        let mut last = first + 1;
+        let mut length = words[first].text.chars().count();
+        while last < words.len()
+            && words[last].start - words[first].start < 2.5
+            && length + words[last].text.chars().count() < 36
+        {
+            length += words[last].text.chars().count();
+            last += 1;
+        }
+        let text = words[first..last]
+            .iter()
+            .enumerate()
+            .map(|(n, w)| {
+                format!(
+                    "{}{}",
+                    if n > 0 && w.text.is_ascii() { " " } else { "" },
+                    w.text
+                )
+            })
+            .collect::<String>();
+        cues.push(Cue {
+            seconds: words[first].start,
+            text,
+        });
+        if words
+            .get(last)
+            .is_none_or(|w| w.start > words[last - 1].end + 0.01)
+        {
+            cues.push(Cue {
+                seconds: words[last - 1].end,
+                text: String::new(),
+            });
+        }
+        first = last;
+    }
+    cues
+}
+
+pub fn to_lrc(cues: &[Cue]) -> String {
+    cues.iter()
+        .map(|cue| {
+            let cs = (cue.seconds * 100.0).round() as u64;
+            format!(
+                "[{:02}:{:02}.{:02}]{}\n",
+                cs / 6000,
+                cs / 100 % 60,
+                cs % 100,
+                cue.text
+            )
+        })
+        .collect()
+}
+
 pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
     make_ass_styled(
         title,

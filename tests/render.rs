@@ -234,6 +234,7 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
     let options = Options {
         key: 3,
         tempo: 1.25,
+        sample_rate: 44100,
         lyrics: "[00:00.50]before\n[00:02.00]next".into(),
         ..Options::default()
     };
@@ -336,6 +337,7 @@ fn real_ffmpeg_exports_retimed_pitched_audio_and_captioned_video_without_modifyi
         title: "字幕の試験".into(),
         key: 3,
         tempo: 1.25,
+        sample_rate: 44100,
         lyrics: "[00:00.50]最初の行\n[00:02.00]次の行".into(),
         original_video: false,
         ..Options::default()

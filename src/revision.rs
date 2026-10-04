@@ -10,7 +10,12 @@ use std::{fs, path::Path};
 pub fn editable_lrc(options: &Options) -> Result<String> {
     options.validate()?;
     let mut lrc = String::new();
-    for cue in lyrics::parse_lrc(&options.lyrics)? {
+    let cues = if !options.words.is_empty() {
+        lyrics::word_cues(&options.words)
+    } else {
+        lyrics::parse_lrc(&options.lyrics)?
+    };
+    for cue in cues {
         let cs = (cue.seconds / options.tempo * 100.0).round() as u64;
         for line in cue.text.split('\n') {
             lrc.push_str(&format!(
@@ -39,6 +44,7 @@ pub fn render_revision(
         lyrics: text.into(),
         preset,
         style: previous.style,
+        sample_rate: previous.sample_rate,
         original_video: false,
         ..Options::default()
     };
