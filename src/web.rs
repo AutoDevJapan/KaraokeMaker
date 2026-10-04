@@ -54,6 +54,7 @@ pub struct App {
     busy: Arc<Semaphore>,
     shutdown: Arc<Notify>,
     worker: Arc<Mutex<Option<JoinHandle<()>>>>,
+    revision_sources: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl App {
@@ -99,6 +100,7 @@ impl App {
             busy: Arc::new(Semaphore::new(1)),
             shutdown: Arc::new(Notify::new()),
             worker: Arc::new(Mutex::new(None)),
+            revision_sources: Arc::new(Mutex::new(std::collections::HashSet::new())),
         })
     }
     fn directory(&self, id: &str) -> Result<PathBuf> {
@@ -202,6 +204,10 @@ pub fn router(app: App) -> Router {
         .route("/jobs/{id}", get(job_page))
         .route("/jobs/{id}/{name}", get(artifact))
         .route("/cancel/{id}", post(cancel))
+        .route(
+            "/revise/{id}",
+            post(revise).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
         .route("/delete/{id}", post(delete))
         .route("/shutdown", post(shutdown))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 128 * 1024))
@@ -471,6 +477,18 @@ async fn job_page(State(app): State<App>, WebPath(id): WebPath<String>) -> Respo
     let running = job.record.status == "running";
     if job.record.status == "done" {
         body.push_str(&format!(r#"<p class="status">音源と映像ができました。</p><video controls preload="metadata" src="/jobs/{id}/karaoke.mp4"></video><div class="actions"><a class="button" download href="/jobs/{id}/karaoke.mp4">映像を保存（MP4）</a><a class="button secondary" download href="/jobs/{id}/karaoke.mp3">音源を保存（MP3）</a><a class="button secondary" download href="/jobs/{id}/karaoke.wav">音源を保存（WAV）</a></div><h2>伴奏を聴く</h2><audio controls preload="none" src="/jobs/{id}/karaoke.mp3"></audio><details><summary>分離した歌声を確認する</summary><audio controls preload="none" src="/jobs/{id}/vocals.wav"></audio><a download href="/jobs/{id}/vocals.wav">歌声だけを保存</a></details>"#));
+        if let Ok(options) =
+            fs::read(app.directory(&id).unwrap().join("settings.json")).and_then(|bytes| {
+                serde_json::from_slice::<Options>(&bytes).map_err(std::io::Error::other)
+            })
+            && let Ok(lrc) = crate::revision::editable_lrc(&options)
+        {
+            let preset = <crate::presentation::VideoPreset as clap::ValueEnum>::to_possible_value(
+                &options.preset,
+            )
+            .unwrap();
+            body.push_str(&format!(r#"<section class="panel"><h2>歌詞と時刻を直す</h2><p>下の時刻は、いま再生している伴奏に合わせています。背景色付きの字幕動画を新しく作ります。</p><form method="post" action="/revise/{id}"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="preset" value="{}"><label for="revision-lyrics">時刻付きの歌詞</label><textarea id="revision-lyrics" name="lyrics" maxlength="65536">{}</textarea><p class="hint">歌い終わりに [00:16.00] のような空の行を入れると、間奏の歌詞を消せます。</p><button type="submit">歌詞だけ直して動画を作る</button></form></section>"#, app.csrf, preset.get_name(), escape(&lrc)));
+        }
     } else if running {
         body.push_str(&format!("<div class=\"panel\"><p class=\"status\">{}</p><p class=\"hint\">この画面は3秒ごとに更新します。</p></div>",escape(&job.progress.get())));
     } else {
@@ -491,6 +509,137 @@ async fn job_page(State(app): State<App>, WebPath(id): WebPath<String>) -> Respo
 #[derive(Deserialize)]
 struct Token {
     csrf: String,
+}
+
+#[derive(Deserialize)]
+struct RevisionForm {
+    csrf: String,
+    lyrics: String,
+    preset: String,
+}
+
+struct SourceLease {
+    sources: Arc<Mutex<std::collections::HashSet<String>>>,
+    id: String,
+}
+impl Drop for SourceLease {
+    fn drop(&mut self) {
+        self.sources
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
+    }
+}
+
+async fn revise(
+    State(app): State<App>,
+    WebPath(source_id): WebPath<String>,
+    Form(form): Form<RevisionForm>,
+) -> Response {
+    if form.csrf != app.csrf {
+        return error_page(StatusCode::FORBIDDEN, "アプリを開き直してください。");
+    }
+    let Some(source) = app
+        .jobs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&source_id)
+        .cloned()
+    else {
+        return error_page(StatusCode::NOT_FOUND, "結果が見つかりません。");
+    };
+    if source.record.status != "done" {
+        return error_page(StatusCode::CONFLICT, "完成した曲の歌詞を直してください。");
+    }
+    let preset = match <crate::presentation::VideoPreset as clap::ValueEnum>::from_str(
+        &form.preset,
+        false,
+    ) {
+        Ok(preset) => preset,
+        Err(_) => return error_page(StatusCode::BAD_REQUEST, "出力解像度を選んでください。"),
+    };
+    if let Err(error) = crate::lyrics::parse_lrc(&form.lyrics) {
+        return error_page(StatusCode::BAD_REQUEST, error);
+    }
+    let Ok(permit) = app.busy.clone().try_acquire_owned() else {
+        return error_page(
+            StatusCode::CONFLICT,
+            "別の曲を処理しています。完成してから歌詞を直してください。",
+        );
+    };
+    let source_dir = match app.directory(&source_id) {
+        Ok(dir) => dir,
+        Err(error) => return error_page(StatusCode::BAD_REQUEST, error),
+    };
+    let lease = {
+        // Deletion uses the same jobs lock, so a source cannot disappear between
+        // checking its state and pinning it for the background copy.
+        let jobs = app.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        if jobs
+            .get(&source_id)
+            .is_none_or(|job| job.record.status != "done")
+        {
+            return error_page(StatusCode::NOT_FOUND, "修正元の結果が見つかりません。");
+        }
+        app.revision_sources
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(source_id.clone());
+        SourceLease {
+            sources: app.revision_sources.clone(),
+            id: source_id,
+        }
+    };
+    let id = Uuid::new_v4().to_string();
+    let dir = app.root.join(&id);
+    if let Err(error) = fs::create_dir(&dir) {
+        return error_page(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    let progress = Progress::default();
+    progress.set("歌詞を直して動画を作っています。音源の分離は繰り返しません。");
+    let record = Record {
+        id: id.clone(),
+        title: source.record.title,
+        status: "running".into(),
+        error: None,
+    };
+    if let Err(error) = app.save(&record) {
+        return error_page(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    app.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(
+        id.clone(),
+        Job {
+            record,
+            progress: progress.clone(),
+        },
+    );
+    let worker_app = app.clone();
+    let worker_id = id.clone();
+    let worker = std::thread::Builder::new()
+        .name("karaoke-revise".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let _permit = permit;
+            let _lease = lease;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::revision::render_revision(&source_dir, &dir, &form.lyrics, preset, &progress)
+            }))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("字幕の作成に失敗しました。")));
+            worker_app.finish(&worker_id, result);
+        });
+    match worker {
+        Ok(worker) => {
+            *app.worker.lock().unwrap_or_else(|e| e.into_inner()) = Some(worker);
+            Redirect::to(&format!("/jobs/{id}")).into_response()
+        }
+        Err(error) => {
+            app.finish(&id, Err(error.into()));
+            error_page(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "字幕の作成を始められませんでした。",
+            )
+        }
+    }
 }
 async fn cancel(
     State(app): State<App>,
@@ -519,6 +668,17 @@ async fn delete(
     let Some(job) = jobs.get(&id) else {
         return error_page(StatusCode::NOT_FOUND, "結果が見つかりません。");
     };
+    if app
+        .revision_sources
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&id)
+    {
+        return error_page(
+            StatusCode::CONFLICT,
+            "この曲の歌詞を修正しています。動画ができてから削除してください。",
+        );
+    }
     if job.record.status == "running" {
         return error_page(StatusCode::CONFLICT, "処理が終わってから削除してください。");
     }
@@ -635,6 +795,212 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn lyrics_can_be_revised_through_the_page_without_loading_a_model() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = App::new(temp.path(), 19531).unwrap();
+        let source_id = Uuid::new_v4().to_string();
+        let source_dir = app.directory(&source_id).unwrap();
+        fs::create_dir(&source_dir).unwrap();
+        let samples: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+        media::write_stereo(&source_dir.join("karaoke.wav"), &samples, &samples).unwrap();
+        media::write_stereo(&source_dir.join("vocals.wav"), &samples, &samples).unwrap();
+        let options = Options {
+            lyrics: "[00:00.10]before\n[00:00.80]\n".into(),
+            ..Options::default()
+        };
+        fs::write(
+            source_dir.join("settings.json"),
+            serde_json::to_vec(&options).unwrap(),
+        )
+        .unwrap();
+        app.jobs.lock().unwrap().insert(
+            source_id.clone(),
+            Job {
+                record: Record {
+                    id: source_id.clone(),
+                    title: "試験".into(),
+                    status: "done".into(),
+                    error: None,
+                },
+                progress: Progress::default(),
+            },
+        );
+        let service = router(app.clone());
+        let mut form = reqwest::Url::parse("http://127.0.0.1/").unwrap();
+        form.query_pairs_mut()
+            .append_pair("csrf", &app.csrf)
+            .append_pair("lyrics", "[00:00.20]corrected\n[00:00.75]\n")
+            .append_pair("preset", "1080p");
+        let response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/revise/{source_id}"))
+                    .header("host", "127.0.0.1:19531")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form.query().unwrap().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let revised_id = location.strip_prefix("/jobs/").unwrap().to_string();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let status = app.jobs.lock().unwrap()[&revised_id].record.status.clone();
+            if status != "running" {
+                assert_eq!(status, "done");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "字幕修正の処理が完了しません"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(!temp.path().join("models").exists());
+        let revised_dir = app.directory(&revised_id).unwrap();
+        assert_eq!(
+            fs::read_to_string(revised_dir.join("lyrics.srt")).unwrap(),
+            "1\n00:00:00,200 --> 00:00:00,750\ncorrected\n\n"
+        );
+        assert_eq!(
+            fs::read_to_string(source_dir.join("settings.json")).unwrap(),
+            serde_json::to_string(&options).unwrap()
+        );
+        assert!(App::recover(&revised_dir, &revised_id).is_some());
+        let page = service
+            .oneshot(
+                Request::builder()
+                    .uri(location)
+                    .header("host", "127.0.0.1:19531")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            page.into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("歌詞だけ直して動画を作る"));
+        assert!(html.contains("[00:00.20]corrected"));
+        app.stop_workers().await;
+    }
+
+    #[tokio::test]
+    async fn revision_form_accepts_encoded_japanese_and_leased_sources_cannot_be_deleted() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = App::new(temp.path(), 19531).unwrap();
+        let id = Uuid::new_v4().to_string();
+        fs::create_dir(app.directory(&id).unwrap()).unwrap();
+        app.jobs.lock().unwrap().insert(
+            id.clone(),
+            Job {
+                record: Record {
+                    id: id.clone(),
+                    title: "曲".into(),
+                    status: "done".into(),
+                    error: None,
+                },
+                progress: Progress::default(),
+            },
+        );
+        let service = router(app.clone());
+        let japanese = (0..300)
+            .map(|n| format!("[{:02}:{:02}.00]{}", n / 60, n % 60, "歌".repeat(50)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(japanese.len() < 64 * 1024);
+        let mut encoded = reqwest::Url::parse("http://127.0.0.1/").unwrap();
+        encoded
+            .query_pairs_mut()
+            .append_pair("csrf", &app.csrf)
+            .append_pair("lyrics", &japanese)
+            .append_pair("preset", "invalid");
+        assert!(encoded.query().unwrap().len() > 128 * 1024);
+        let response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/revise/{id}"))
+                    .header("host", "127.0.0.1:19531")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(encoded.query().unwrap().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST); // Parsed form, invalid preset, not 413.
+        encoded
+            .query_pairs_mut()
+            .clear()
+            .append_pair("csrf", &app.csrf)
+            .append_pair("lyrics", &"a".repeat(65537))
+            .append_pair("preset", "1080p");
+        let response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/revise/{id}"))
+                    .header("host", "127.0.0.1:19531")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(encoded.query().unwrap().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        app.revision_sources.lock().unwrap().insert(id.clone());
+        let lease = SourceLease {
+            sources: app.revision_sources.clone(),
+            id: id.clone(),
+        };
+        let response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/delete/{id}"))
+                    .header("host", "127.0.0.1:19531")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("csrf={}", app.csrf)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(app.directory(&id).unwrap().is_dir());
+        drop(lease);
+        let response = service
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/delete/{id}"))
+                    .header("host", "127.0.0.1:19531")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("csrf={}", app.csrf)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(!app.directory(&id).unwrap().exists());
+    }
     #[tokio::test]
     async fn web_resolution_select_is_received_and_invalid_values_are_rejected() {
         use axum::extract::FromRequest;

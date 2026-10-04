@@ -99,7 +99,7 @@ impl Tools {
                 })?;
             ensure!(status.success(), "FFmpegを起動できませんでした。");
         }
-        for filter in ["rubberband", "ass"] {
+        for filter in ["rubberband", "ass", "ebur128"] {
             let output = hidden_command(&self.ffmpeg)
                 .args(["-hide_banner", "-h", &format!("filter={filter}")])
                 .output()?;
@@ -215,6 +215,16 @@ pub fn decode(
     dir: &Path,
     progress: &Progress,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
+    decode_bounded(tools, input, dir, progress, MAX_DURATION)
+}
+
+fn decode_bounded(
+    tools: &Tools,
+    input: &Path,
+    dir: &Path,
+    progress: &Progress,
+    max_duration: f64,
+) -> Result<(Vec<f32>, Vec<f32>)> {
     run(
         tools,
         dir,
@@ -254,8 +264,8 @@ pub fn decode(
         left.push(l);
         right.push(r);
         ensure!(
-            left.len() <= MAX_DURATION as usize * 44100,
-            "曲は15分以内にしてください。"
+            left.len() <= max_duration as usize * 44100,
+            "音源が処理できる長さを超えています。"
         );
     }
     ensure!(!left.is_empty(), "音源が空です。");
@@ -289,6 +299,74 @@ pub fn write_stereo(path: &Path, left: &[f32], right: &[f32]) -> Result<()> {
         writer.write_sample(r)?;
     }
     writer.finalize()?;
+    Ok(())
+}
+
+/// Oversampled peak measurement, rather than the largest stored sample.
+pub fn true_peak(tools: &Tools, input: &Path) -> Result<f64> {
+    let output = hidden_command(&tools.ffmpeg)
+        .args(["-hide_banner", "-nostdin", "-i"])
+        .arg(input)
+        .args([
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-sn",
+            "-dn",
+            "-af",
+            "ebur128=peak=true",
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "音源のピークを測定できませんでした。"
+    );
+    let log = String::from_utf8_lossy(&output.stderr);
+    let summary = log
+        .rsplit_once("True peak:")
+        .context("音源のピークを読み取れませんでした。")?
+        .1;
+    let value = summary
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Peak:"))
+        .and_then(|value| value.split_whitespace().next())
+        .context("音源のピークを読み取れませんでした。")?;
+    let peak = value.parse::<f64>()?;
+    ensure!(
+        peak.is_finite() || peak == f64::NEG_INFINITY,
+        "音源のピークが不正です。"
+    );
+    Ok(peak)
+}
+
+fn preserve_headroom(tools: &Tools, dir: &Path, progress: &Progress) -> Result<()> {
+    progress.check()?;
+    progress.set("再生時に歪まないよう音量を確認しています。");
+    let peak = true_peak(tools, &dir.join("karaoke.wav"))?;
+    if peak > -3.0 {
+        // Keep dynamics intact. Leave room for MP3/AAC intersample overshoot.
+        let gain = -3.1 - peak;
+        fs::rename(dir.join("karaoke.wav"), dir.join("karaoke-unchecked.wav"))?;
+        run(
+            tools,
+            dir,
+            &[
+                "-i".into(),
+                "karaoke-unchecked.wav".into(),
+                "-af".into(),
+                format!("volume={gain:.3}dB"),
+                "-c:a".into(),
+                "pcm_s24le".into(),
+                "karaoke.wav".into(),
+            ],
+            progress,
+        )?;
+        fs::remove_file(dir.join("karaoke-unchecked.wav"))?;
+    }
+    progress.check()?;
     Ok(())
 }
 
@@ -341,6 +419,7 @@ pub fn export(
         ],
         progress,
     )?;
+    preserve_headroom(tools, dir, progress)?;
     run(
         tools,
         dir,
@@ -393,6 +472,13 @@ pub fn export(
         "-movflags".into(), "+faststart".into(), "karaoke.mp4".into()
     ]);
     run(tools, dir, &args, progress)?;
+    for name in ["karaoke.mp3", "karaoke.mp4"] {
+        progress.check()?;
+        ensure!(
+            true_peak(tools, &dir.join(name))? < 0.0,
+            "出力音源のピークが大きすぎます。音量を確認してください。"
+        );
+    }
     let audio = probe(tools, &dir.join("karaoke.wav"))?;
     let video = probe(tools, &dir.join("karaoke.mp4"))?;
     let expected = duration / options.tempo;
@@ -414,6 +500,26 @@ pub fn export(
 /// Render supplied audio (original mix or approved instrumental) without AI separation.
 /// Inputs remain untouched; the CLI allocates a fresh output directory per revision.
 pub fn render(input: &Path, dir: &Path, options: &Options, progress: &Progress) -> Result<()> {
+    render_bounded(input, dir, options, progress, MAX_DURATION)
+}
+
+pub(crate) fn render_retimed_audio(
+    input: &Path,
+    dir: &Path,
+    options: &Options,
+    progress: &Progress,
+) -> Result<()> {
+    // A 15-minute original at the supported minimum tempo has 30 minutes of output.
+    render_bounded(input, dir, options, progress, MAX_DURATION / 0.5)
+}
+
+fn render_bounded(
+    input: &Path,
+    dir: &Path,
+    options: &Options,
+    progress: &Progress,
+    max_duration: f64,
+) -> Result<()> {
     options.validate()?;
     let input = input
         .canonicalize()
@@ -423,10 +529,10 @@ pub fn render(input: &Path, dir: &Path, options: &Options, progress: &Progress) 
     tools.check()?;
     let source = probe(&tools, &input)?;
     ensure!(
-        source.duration <= MAX_DURATION,
-        "曲は15分以内にしてください。"
+        source.duration <= max_duration,
+        "音源が処理できる長さを超えています。"
     );
-    let (left, right) = decode(&tools, &input, &dir, progress)?;
+    let (left, right) = decode_bounded(&tools, &input, &dir, progress, max_duration)?;
     let duration = left.len() as f64 / 44100.0;
     write_stereo(&dir.join("instrumental-raw.wav"), &left, &right)?;
     export(&tools, &input, &dir, &source, options, duration, progress)?;
@@ -438,6 +544,23 @@ pub fn render(input: &Path, dir: &Path, options: &Options, progress: &Progress) 
     fs::remove_file(dir.join("instrumental-raw.wav"))?;
     progress.set("指定した音源で字幕付き映像ができました。");
     Ok(())
+}
+
+pub(crate) fn retime_vocals(dir: &Path, tempo: f64, progress: &Progress) -> Result<()> {
+    run(
+        &Tools::discover(),
+        dir,
+        &[
+            "-i".into(),
+            "revision-vocals.wav".into(),
+            "-af".into(),
+            format!("rubberband=tempo={tempo}:channels=together"),
+            "-c:a".into(),
+            "pcm_f32le".into(),
+            "vocals.wav".into(),
+        ],
+        progress,
+    )
 }
 
 pub fn convert(
