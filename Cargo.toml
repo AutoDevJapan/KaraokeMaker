@@ -1,0 +1,51 @@
+[package]
+name = "karaoke-maker"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+
+[workspace]
+members = ["."]
+exclude = ["vendor/demucs-core"]
+resolver = "3"
+
+[features]
+default = ["gpu"]
+gpu = ["dep:burn", "dep:demucs-core", "dep:pollster"]
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["multipart"] }
+burn = { version = "0.20.1", optional = true, default-features = false, features = ["std", "wgpu", "vulkan"] }
+clap = { version = "4", features = ["derive"] }
+demucs-core = { path = "vendor/demucs-core", optional = true, features = ["wgpu"] }
+hound = "3"
+open = "5"
+pollster = { version = "0.4", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net", "signal", "sync"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+opt-level = 3
+strip = true
+
+[[bin]]
+name = "karaoke-maker"
+path = "src/desktop.rs"
+
+[[bin]]
+name = "karaoke-maker-cli"
+path = "src/main.rs"

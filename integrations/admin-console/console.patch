@@ -1,0 +1,57 @@
+diff --git a/src/index.html b/src/index.html
+index 028d92c..f7434ee 100644
+--- a/src/index.html
++++ b/src/index.html
+@@ -21,7 +21,7 @@
+   <div class="shell">
+     <aside class="sidebar">
+       <div class="brand"><div class="mark">✦</div><div><h1>Local AI Console</h1><p>Local-first workspace</p></div></div>
+-      <nav class="nav"><button data-view="chat">Chat</button><button data-view="minimax">MiniMax-H3</button><button data-view="kanban" class="active">Operations</button><button data-view="workload">仕事量</button><button data-view="systems">Systems</button></nav>
++      <nav class="nav"><button data-view="chat">Chat</button><button data-view="minimax">MiniMax-H3</button><button data-view="kanban" class="active">Operations</button><a href="/music" style="display:block;padding:12px 14px;text-decoration:none;color:inherit">音楽制作 · Suno</a><button data-view="workload">仕事量</button><button data-view="systems">Systems</button></nav>
+       <section class="side-card"><h2>Runtime</h2><div id="mini-services"></div></section>
+       <section class="side-card"><h2>Local models</h2><div id="model-summary" class="service-mini">Loading…</div></section>
+       <div class="sidebar-footer">127.0.0.1 only · port <span id="port-label">10012</span></div>
+diff --git a/src/main.rs b/src/main.rs
+index 3c9eb51..d9c7b36 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -11,6 +11,7 @@ use serde_json::{json, Value};
+ use std::{process::Command, time::Duration};
+ use tower_http::services::ServeDir;
+ mod agent;
++mod music_bridge;
+ mod workload;
+ 
+ const INDEX_HTML: &str = include_str!("index.html");
+@@ -81,14 +82,18 @@ async fn main() {
+         .await
+         .unwrap();
+     println!("Rust Web Server listening on http://127.0.0.1:{port}");
+-    tokio::spawn(agent::resident(console));
+-    tokio::spawn(workload::resident(workload));
++    if std::env::var("LOCALAI_WEB_PREVIEW").as_deref() != Ok("1") {
++        tokio::spawn(agent::resident(console));
++        tokio::spawn(workload::resident(workload));
++    }
+     axum::serve(listener, app).await.unwrap();
+ }
+ 
+ fn app(state: AppState) -> Router {
+     let mut app = Router::new()
+         .route("/", get(index_html))
++        .route("/music", axum::routing::any(music_proxy))
++        .route("/music/*path", axum::routing::any(music_proxy))
+         .route("/api/health", get(health_check))
+         .route("/api/omb-board", get(omb_board))
+         .route("/api/tasks", get(get_tasks))
+@@ -118,6 +123,10 @@ async fn index_html() -> Html<String> {
+     ))
+ }
+ 
++async fn music_proxy(State(state): State<AppState>, request: Request) -> Response {
++    music_bridge::handle(state.client, request).await
++}
++
+ fn json_error(status: StatusCode, message: &str) -> Response {
+     (status, Json(json!({"error": message}))).into_response()
+ }

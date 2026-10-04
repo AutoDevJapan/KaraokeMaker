@@ -1,0 +1,7 @@
+/target/
+/data/
+/runtime/
+/dist/
+/evidence/
+*.log
+.env*
