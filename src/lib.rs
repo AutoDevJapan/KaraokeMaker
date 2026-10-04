@@ -1,10 +1,16 @@
+pub mod alignment;
 pub mod entry;
 pub mod lyrics;
 pub mod media;
 pub mod model;
 pub mod music;
+pub mod ocr;
 pub mod presentation;
+pub mod quality;
 pub mod revision;
+pub mod roformer;
+pub mod runtime;
+pub mod spectral;
 pub mod suno;
 pub mod web;
 

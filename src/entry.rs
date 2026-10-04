@@ -44,6 +44,12 @@ enum Mode {
         /// JSON with background/accent RGB colors and an installed font name.
         #[arg(long)]
         style: Option<PathBuf>,
+        #[arg(long,value_enum,default_value_t=crate::model::SeparationModel::MelBandFp16)]
+        separation: crate::model::SeparationModel,
+        #[arg(long)]
+        words: Option<PathBuf>,
+        #[arg(long)]
+        no_subtitles: bool,
     },
     /// 指定した音源に歌詞を付けます（音源分離なし）。
     Render {
@@ -60,9 +66,44 @@ enum Mode {
         style: Option<PathBuf>,
         #[arg(long)]
         background: bool,
+        #[arg(long)]
+        words: Option<PathBuf>,
     },
     FetchModel,
     Check,
+    AlignEnglish {
+        audio: PathBuf,
+        #[arg(long)]
+        lyrics: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(
+            long,
+            default_value = "D:/CC/Tools/forced-align/models/model_quantized.onnx"
+        )]
+        model: PathBuf,
+        #[arg(long, default_value = "D:/CC/Tools/forced-align/models/vocab.json")]
+        vocab: PathBuf,
+    },
+    AlignWhisper {
+        transcript: PathBuf,
+        #[arg(long)]
+        lyrics: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    ReadSubtitleFrames {
+        folder: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    MeasureAudio {
+        input: PathBuf,
+    },
+    CheckRuntime {
+        #[arg(long)]
+        gpu_first: bool,
+    },
 }
 pub fn main() {
     let result = std::thread::Builder::new()
@@ -100,6 +141,96 @@ fn run() -> Result<()> {
         port: 19531,
         no_open: false,
     }) {
+        Mode::CheckRuntime { gpu_first } => {
+            #[cfg(feature = "ort")]
+            {
+                let cpu = || -> Result<()> {
+                    use ort::{session::Session, value::Tensor};
+                    crate::runtime::initialize(false)?;
+                    let mut session = Session::builder()?
+                        .commit_from_file("D:/CC/Tools/forced-align/models/model_quantized.onnx")?;
+                    let _=session.run(ort::inputs!["input_values"=>Tensor::from_array(([1,16000],vec![0f32;16000]))?])?;
+                    Ok(())
+                };
+                let gpu = || -> Result<()> {
+                    let signal: Vec<f32> =
+                        (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+                    let _ = crate::model::separate_using(
+                        &signal,
+                        &signal,
+                        &data.join("models"),
+                        crate::model::SeparationModel::MelBandFp16,
+                        &Progress::default(),
+                    )?;
+                    Ok(())
+                };
+                if gpu_first {
+                    gpu()?;
+                    cpu()?;
+                } else {
+                    cpu()?;
+                    gpu()?;
+                }
+                println!("CPUとCUDAを同じプロセスで利用できました。");
+            }
+            #[cfg(not(feature = "ort"))]
+            {
+                let _ = gpu_first;
+                anyhow::bail!("このビルドにはONNX接続がありません。");
+            }
+        }
+        Mode::MeasureAudio { input } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crate::quality::measure(&input)?)?
+            );
+        }
+        Mode::ReadSubtitleFrames { folder, output } => {
+            use std::io::Write;
+            let result = crate::ocr::read_folder(&folder)?;
+            fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(output)?
+                .write_all(&serde_json::to_vec_pretty(&result)?)?;
+        }
+        Mode::AlignWhisper {
+            transcript,
+            lyrics,
+            output,
+        } => {
+            let words = crate::alignment::reference_to_whisper(
+                &fs::read_to_string(lyrics)?,
+                &serde_json::from_slice(&fs::read(transcript)?)?,
+            )?;
+            use std::io::Write;
+            fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(output)?
+                .write_all(&serde_json::to_vec_pretty(&words)?)?;
+        }
+        Mode::AlignEnglish {
+            audio,
+            lyrics,
+            output,
+            model,
+            vocab,
+        } => {
+            let words = crate::alignment::force_english(
+                &audio,
+                &fs::read_to_string(lyrics)?,
+                &model,
+                &vocab,
+                &Progress::default(),
+            )?;
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(output)?;
+            file.write_all(&serde_json::to_vec_pretty(&words)?)?;
+        }
         Mode::Check => {
             Tools::discover().check()?;
             println!("FFmpegの音源・映像・字幕変換を利用できます。");
@@ -118,6 +249,9 @@ fn run() -> Result<()> {
             background,
             preset,
             style,
+            separation,
+            words,
+            no_subtitles,
         } => {
             fs::create_dir_all(&output)?;
             let dir = output.join(uuid::Uuid::new_v4().to_string());
@@ -133,6 +267,13 @@ fn run() -> Result<()> {
                 original_video: !background,
                 preset,
                 style: read_style(style)?,
+                separation,
+                sample_rate: 48000,
+                words: words
+                    .map(|p| -> Result<_> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
+                    .transpose()?
+                    .unwrap_or_default(),
+                automatic_subtitles: !no_subtitles,
             };
             media::convert(
                 &input,
@@ -151,6 +292,7 @@ fn run() -> Result<()> {
             preset,
             style,
             background,
+            words,
         } => {
             let options = Options {
                 title,
@@ -158,6 +300,10 @@ fn run() -> Result<()> {
                 original_video: !background,
                 preset,
                 style: read_style(style)?,
+                words: words
+                    .map(|p| -> Result<_> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
+                    .transpose()?
+                    .unwrap_or_default(),
                 ..Options::default()
             };
             options.validate()?;

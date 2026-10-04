@@ -301,8 +301,10 @@ async fn home(State(app): State<App>) -> Html<String> {
     <label for="title">曲名（任意）</label><input id="title" name="title" type="text" maxlength="120" placeholder="空欄ならファイル名を使います">
     <div class="row"><div><label for="key">キー</label><input id="key" name="key" type="number" min="-6" max="6" value="0"><p class="hint">半音単位。0で元のキー。</p></div><div><label for="tempo">速度</label><input id="tempo" name="tempo" type="number" min="0.5" max="1.5" step="0.05" value="1"><p class="hint">1で元の速度。0.8でゆっくり。</p></div></div>
     <label for="video">映像</label><select id="video" name="video"><option value="original">元の動画を使う（音楽だけなら背景を付ける）</option><option value="background">落ち着いた背景にする</option></select>
+    <label for="separation">歌声の分離方法</label><select id="separation" name="separation"><option value="mel-band-fp16">高音質・ギターと低音を残す（Mel-Band RoFormer）</option><option value="fine-tuned-residual">比較用・調整版Demucs</option><option value="standard">比較用・従来のDemucs</option></select><p class="hint">メタルや速いラップも曲ごとに確認してください。音声は48kHz・24bitで保存します。モデルの初回取得と準備に時間がかかります。</p>
     <label for="preset">出力解像度</label><select id="preset" name="preset"><option value="hd" selected>HD（1280×720）</option><option value="1080p">フルHD（1920×1080）</option><option value="1440p">1440p（2560×1440）</option><option value="4k">4K（3840×2160）</option><option value="vertical">縦長フルHD（1080×1920）</option><option value="vertical-4k">縦長4K（2160×3840）</option></select><p class="hint">4Kは処理時間と容量が増えます。原本の細部は拡大しても増えません。</p>
-    <details><summary>時刻付きの歌詞を載せる（任意）</summary><label for="lyrics">歌詞</label><textarea id="lyrics" name="lyrics" maxlength="65536" placeholder="[00:12.34]最初の歌詞&#10;[00:18.00]次の歌詞"></textarea><p class="hint">LRC形式で貼り付けます。表示中の行を色で追い、速度を変えると歌詞の時刻も合わせます。歌詞の自動聞き取りはありません。</p></details>
+    <label for="automatic_subtitles">歌詞がないときの字幕</label><select id="automatic_subtitles" name="automatic_subtitles"><option value="true">このPCで聞き取り、確認用の字幕を作る</option><option value="false">字幕を作らない（元の映像に字幕があるときなど）</option></select>
+    <details><summary>正本の歌詞・時刻付きの歌詞を入れる</summary><label for="lyrics">歌詞</label><textarea id="lyrics" name="lyrics" maxlength="65536" placeholder="正本の歌詞、または [00:12.34]最初の歌詞"></textarea><p class="hint">歌詞があれば聞き取りより優先します。速いラップや叫び声は自動の時刻がずれる場合があります。完成後に修正できます。</p><label for="lyric_file">歌詞ファイル（UTF-8のTXT・LRC）</label><input id="lyric_file" name="lyric_file" type="file" accept=".txt,.lrc"></details>
     <button type="submit">カラオケを作る</button><p class="hint">曲の長さとPCの性能によって、数分以上かかります。</p></form>
     <h2>作ったカラオケ</h2>{}<form action="/shutdown" method="post" style="margin-top:32px"><input type="hidden" name="csrf" value="{}"><button class="secondary" type="submit">アプリを終了する</button></form>"#,
         app.csrf,
@@ -444,6 +446,21 @@ async fn receive(app: &App, dir: &Path, multipart: &mut Multipart) -> Result<Opt
                     options.original_video = value == "original";
                 }
                 "lyrics" => options.lyrics = value,
+                "lyric_file" => {
+                    if !value.trim().is_empty() {
+                        anyhow::ensure!(
+                            options.lyrics.trim().is_empty(),
+                            "歌詞は貼り付けかファイルのどちらかで指定してください。"
+                        );
+                        options.lyrics = value.trim_start_matches('\u{feff}').into();
+                    }
+                }
+                "separation" => {
+                    options.separation =
+                        <crate::model::SeparationModel as clap::ValueEnum>::from_str(&value, false)
+                            .map_err(|_| anyhow::anyhow!("分離方法を選んでください。"))?
+                }
+                "automatic_subtitles" => options.automatic_subtitles = value == "true",
                 "preset" => {
                     options.preset =
                         <crate::presentation::VideoPreset as clap::ValueEnum>::from_str(
@@ -475,7 +492,19 @@ async fn job_page(State(app): State<App>, WebPath(id): WebPath<String>) -> Respo
     };
     let mut body = format!("<h1>{}</h1>", escape(&job.record.title));
     let running = job.record.status == "running";
+    if let Ok(reference) = app
+        .directory(&id)
+        .and_then(|dir| Ok(fs::read_to_string(dir.join("reference-lyrics.txt"))?))
+        && !reference.trim().is_empty()
+    {
+        body.push_str(&format!("<details><summary>入力した正本の歌詞を確認する</summary><pre style=\"white-space:pre-wrap\">{}</pre></details>",escape(&reference)));
+    }
     if job.record.status == "done" {
+        let has_lyrics = fs::read_to_string(app.directory(&id).unwrap().join("lyrics.lrc"))
+            .is_ok_and(|lrc| !lrc.trim().is_empty());
+        if !has_lyrics {
+            body.push_str("<p class=\"error\">歌詞字幕を確定できていません。下の欄へ時刻付きの歌詞を入れ、動画を作り直してください。伴奏は試聴できます。</p>");
+        }
         body.push_str(&format!(r#"<p class="status">音源と映像ができました。</p><video controls preload="metadata" src="/jobs/{id}/karaoke.mp4"></video><div class="actions"><a class="button" download href="/jobs/{id}/karaoke.mp4">映像を保存（MP4）</a><a class="button secondary" download href="/jobs/{id}/karaoke.mp3">音源を保存（MP3）</a><a class="button secondary" download href="/jobs/{id}/karaoke.wav">音源を保存（WAV）</a></div><h2>伴奏を聴く</h2><audio controls preload="none" src="/jobs/{id}/karaoke.mp3"></audio><details><summary>分離した歌声を確認する</summary><audio controls preload="none" src="/jobs/{id}/vocals.wav"></audio><a download href="/jobs/{id}/vocals.wav">歌声だけを保存</a></details>"#));
         if let Ok(options) =
             fs::read(app.directory(&id).unwrap().join("settings.json")).and_then(|bytes| {

@@ -5,6 +5,133 @@ use karaoke_maker::{
 use std::fs;
 
 #[test]
+fn render_preserves_48khz_high_band_and_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let mut writer = hound::WavWriter::create(
+        &source,
+        hound::WavSpec {
+            channels: 2,
+            sample_rate: 48000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        },
+    )
+    .unwrap();
+    let source_samples: Vec<f32> = (0..48000)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 23000.0 / 48000.0).sin() * 0.1)
+        .collect();
+    for &v in &source_samples {
+        writer.write_sample(v).unwrap();
+        writer.write_sample(v).unwrap();
+    }
+    writer.finalize().unwrap();
+    let bytes = fs::read(&source).unwrap();
+    let dir = temp.path().join("out");
+    fs::create_dir(&dir).unwrap();
+    media::render(
+        &source,
+        &dir,
+        &Options {
+            sample_rate: 48000,
+            ..Options::default()
+        },
+        &Progress::default(),
+    )
+    .unwrap();
+    let mut reader = hound::WavReader::open(dir.join("karaoke.wav")).unwrap();
+    assert_eq!(reader.spec().sample_rate, 48000);
+    let output: Vec<f32> = reader
+        .samples::<i32>()
+        .map(|v| v.unwrap() as f32 / 8388608.0)
+        .step_by(2)
+        .collect();
+    assert_eq!(output.len(), source_samples.len());
+    let error = output
+        .iter()
+        .zip(&source_samples)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max);
+    assert!(error < 2e-6, "23kHz waveform changed: {error}");
+    assert_eq!(fs::read(source).unwrap(), bytes);
+}
+
+#[test]
+fn word_timing_burns_visible_subtitles_and_exports_48khz_audio() {
+    use karaoke_maker::{alignment::Word, presentation::VideoPreset};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let output = temp.path().join("out");
+    fs::create_dir(&output).unwrap();
+    let words = vec![
+        Word {
+            text: "Read".into(),
+            start: 0.2,
+            end: 0.6,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        },
+        Word {
+            text: "me".into(),
+            start: 0.6,
+            end: 1.0,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        },
+    ];
+    media::render(
+        &source,
+        &output,
+        &Options {
+            title: "test".into(),
+            preset: VideoPreset::FullHd,
+            words,
+            ..Options::default()
+        },
+        &Progress::default(),
+    )
+    .unwrap();
+    let reader = hound::WavReader::open(output.join("karaoke.wav")).unwrap();
+    assert_eq!(reader.spec().sample_rate, 48000);
+    assert_eq!(reader.spec().bits_per_sample, 24);
+    let ass = fs::read_to_string(output.join("lyrics.ass")).unwrap();
+    assert!(ass.contains("{\\kf40}Read {\\kf40}me"));
+    let srt = fs::read_to_string(output.join("lyrics.srt")).unwrap();
+    assert!(srt.contains("00:00:00,200 --> 00:00:01,000\nRead me"));
+    let frame = media::hidden_command(Tools::discover().ffmpeg)
+        .args(["-v", "error", "-ss", "0.4", "-i"])
+        .arg(output.join("karaoke.mp4"))
+        .args([
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(frame.status.success());
+    let region = &frame.stdout[1920 * 700 * 3..1920 * 1000 * 3];
+    assert!(
+        region
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|p| p.iter().all(|&v| v > 128))
+            .count()
+            > 500
+    );
+}
+
+#[test]
 fn loud_audio_keeps_headroom_after_wav_mp3_and_aac_export() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.wav");
@@ -234,6 +361,7 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
     let options = Options {
         key: 3,
         tempo: 1.25,
+        sample_rate: 44100,
         lyrics: "[00:00.50]before\n[00:02.00]next".into(),
         ..Options::default()
     };
@@ -336,6 +464,7 @@ fn real_ffmpeg_exports_retimed_pitched_audio_and_captioned_video_without_modifyi
         title: "字幕の試験".into(),
         key: 3,
         tempo: 1.25,
+        sample_rate: 44100,
         lyrics: "[00:00.50]最初の行\n[00:02.00]次の行".into(),
         original_video: false,
         ..Options::default()

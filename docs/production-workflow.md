@@ -57,7 +57,7 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 | 字幕 | 正本と全行照合して誤字なし。目標の開始誤差は±100ms以内、歌い終わり・間奏は顧客の意図と一致。ASR結果だけで合格にしない |
 | 表示 | 全編を目視し、冒頭・サビ・終盤のフレームも確認。日本語の欠け、画面外の文字、読めない長文、顔との重なりなし。縦は左右と上下の配信UIの領域を避ける |
 | 音量 | クリップ・途中の無音・不自然な音量跳びなし。アプリはWAVのtrue peakを測り、必要なら単純な減衰で約-3.1dBTPへ下げる。MP3/AACは0dB未満を確認する。商用納品の-1dBTP以下は別途確認 |
-| 形式 | ffprobeで横1920×1080または縦1080×1920、30fps、H.264/yuv420p、AAC、WAV24bit/44.1kHz/stereo、MP3を確認。動画・WAVと元曲の長さの差は±0.25秒未満 |
+| 形式 | ffprobeで横1920×1080または縦1080×1920、30fps、H.264/yuv420p、AAC、WAV24bit/48kHz/stereo、MP3を確認。動画・WAVと元曲の長さの差は±0.25秒未満 |
 | 再制作 | 原本のSHA-256が受領時と同じ。LRC、SRT、ASS、配色、採用伴奏と設定を保存し、修正版が別フォルダにある |
 | 納品 | 新しいプレイヤーで再生・頭出しできる。正しい案件のファイルだけを添付。権利・用途・クレジット・実績掲載許可を照合 |
 
@@ -70,7 +70,7 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 - `render` で完成音源や提供伴奏を字幕付き動画にし、音源分離なしで修正版を作れる。
 - LRCを原曲時刻で、SRT/ASSを出力時刻で保存できる。空のLRC行で間奏の表示を終えられる。
 
-新しいRust依存は追加していない。画面から解像度を選べ、完成後はLRCと時刻を修正して音源分離なしで背景付き動画を作り直せる。波形や各行のドラッグ編集・自動同期は今後の項目。
+モデル実行と同期に必要なRust依存を追加し、固定版と条件をdependencies.mdに記録した。画面から解像度を選べ、完成後はLRCと時刻を修正して音源分離なしで背景付き動画を作り直せる。波形や各行のドラッグ編集は今後の項目。自動同期は候補を作る機能で、正確さの確認は必要。
 
 1440p/4K指定時の形式検品では上の1080p解像度の条件を、それぞれ2560×1440/3840×2160へ置き換える。品質と容量に応じた設定・書き出しの測定結果は [4k-validation.md](4k-validation.md) を参照する。歌入り・伴奏の両方で指定解像度を確認する。
 
@@ -81,7 +81,7 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 | 曲ごとの分離品質を判定した商用実績 | 購入前の比較試聴。提供伴奏優先、不合格は受注しない | [音源分離の評価](https://github.com/AutoDevJapan/KaraokeMaker/issues/2) |
 | 開始・終了を波形を見て直す編集画面 | 完成画面のLRC修正と再出力を使用し全編確認 | [歌詞編集画面](https://github.com/AutoDevJapan/KaraokeMaker/issues/3) |
 | 背景画像・ロゴ・配置を保存するテンプレート | 色・フォント・改行を案件別に指定。許可済み背景はFFmpegで準備 | [動画テンプレート](https://github.com/AutoDevJapan/KaraokeMaker/issues/4) |
-| 48kHz・納品検査の自動記録 | 44.1kHz標準、ピーク測定は実装済み。試聴・目視と商用基準は手動確認 | [納品の形式と検品](https://github.com/AutoDevJapan/KaraokeMaker/issues/5) |
+| 48kHz・納品検査の自動記録 | 48kHz標準、ピーク測定は実装済み。試聴・目視と商用基準は手動確認 | [納品の形式と検品](https://github.com/AutoDevJapan/KaraokeMaker/issues/5) |
 
 2026-10-04のオーナー指示により、現在はADJでの本人の試用を先に行い、出品と出品の相談を止める。将来の受注開始には、権利確認済みサンプルでの全編試聴・字幕目視と制作時間の記録が必要。元の伴奏を提供してもらう案件でも、表示と納品の検品は省略しない。
 
