@@ -5,6 +5,109 @@ use karaoke_maker::{
 use std::fs;
 
 #[test]
+fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_model() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let samples: Vec<f32> = (0..44100)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 440.0 / 44100.0).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &samples, &samples).unwrap();
+    let original = fs::read(&source).unwrap();
+    let lrc = temp.path().join("lyrics.lrc");
+    let style = temp.path().join("style.json");
+    fs::write(
+        &style,
+        r#"{"background":"301020","accent":"abcdef","font":"DejaVu Sans"}"#,
+    )
+    .unwrap();
+    let data = temp.path().join("data");
+    let output = temp.path().join("results");
+    for (preset, width, height, text) in [
+        ("full-hd", 1920, 1080, "first"),
+        ("vertical", 1080, 1920, "revised"),
+    ] {
+        fs::write(&lrc, format!("[00:00.10]{text}\n[00:00.80]\n")).unwrap();
+        let result = media::hidden_command(env!("CARGO_BIN_EXE_karaoke-maker-cli"))
+            .arg("--data")
+            .arg(&data)
+            .arg("render")
+            .arg(&source)
+            .arg("--output")
+            .arg(&output)
+            .args(["--title", "test", "--preset", preset])
+            .arg("--lyrics")
+            .arg(&lrc)
+            .arg("--style")
+            .arg(&style)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let dir = std::path::PathBuf::from(String::from_utf8(result.stdout).unwrap().trim());
+        let probe = media::hidden_command(Tools::discover().ffprobe)
+            .args(["-v", "error", "-show_streams", "-of", "json"])
+            .arg(dir.join("karaoke.mp4"))
+            .output()
+            .unwrap();
+        assert!(probe.status.success());
+        let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+        let streams = json["streams"].as_array().unwrap();
+        let video = streams.iter().find(|s| s["codec_type"] == "video").unwrap();
+        assert_eq!(video["width"], width);
+        assert_eq!(video["height"], height);
+        assert_eq!(video["codec_name"], "h264");
+        assert_eq!(video["pix_fmt"], "yuv420p");
+        assert_eq!(video["r_frame_rate"], "30/1");
+        assert_eq!(
+            streams.iter().find(|s| s["codec_type"] == "audio").unwrap()["codec_name"],
+            "aac"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("lyrics.lrc")).unwrap(),
+            format!("[00:00.10]{text}\n[00:00.80]\n")
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("lyrics.srt")).unwrap(),
+            format!("1\n00:00:00,100 --> 00:00:00,800\n{text}\n\n")
+        );
+        let ass = fs::read_to_string(dir.join("lyrics.ass")).unwrap();
+        assert!(ass.contains("&H00efcdab"));
+        assert!(ass.contains(&format!("PlayResX: {width}")));
+        assert!(ass.contains(&format!("PlayResY: {height}")));
+    }
+    assert_eq!(fs::read_dir(output).unwrap().count(), 2);
+    assert_eq!(fs::read(&source).unwrap(), original);
+    assert!(!data.join("models").exists());
+}
+
+#[test]
+fn old_settings_keep_hd_output_and_invalid_style_is_rejected() {
+    let options: Options = serde_json::from_str(
+        r#"{"title":"old","key":0,"tempo":1.0,"lyrics":"","original_video":false}"#,
+    )
+    .unwrap();
+    assert_eq!(options.preset.dimensions(), (1280, 720));
+    options.validate().unwrap();
+    for style in [
+        r#"{"background":"abc,ass=evil"}"#,
+        r#"{"accent":"１２３４５６"}"#,
+        r#"{"font":"fake\n[Events]"}"#,
+        r#"{"font":"fake,100"}"#,
+        r#"{"font":""}"#,
+        r#"{"accentt":"abcdef"}"#,
+    ] {
+        let parsed = serde_json::from_str::<karaoke_maker::presentation::VisualStyle>(style);
+        assert!(
+            parsed.is_err() || parsed.unwrap().validate().is_err(),
+            "{style}"
+        );
+    }
+}
+
+#[test]
 fn real_ffmpeg_exports_retimed_pitched_audio_and_captioned_video_without_modifying_source() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.wav");
@@ -33,6 +136,7 @@ fn real_ffmpeg_exports_retimed_pitched_audio_and_captioned_video_without_modifyi
         tempo: 1.25,
         lyrics: "[00:00.50]最初の行\n[00:02.00]次の行".into(),
         original_video: false,
+        ..Options::default()
     };
     media::export(
         &tools,

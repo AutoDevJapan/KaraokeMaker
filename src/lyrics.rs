@@ -1,3 +1,4 @@
+use crate::presentation::{VideoPreset, VisualStyle};
 use anyhow::{Context, Result, ensure};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +117,17 @@ fn stamp(seconds: f64) -> String {
 }
 
 pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
+    make_ass_styled(
+        title,
+        cues,
+        duration,
+        tempo,
+        VideoPreset::Hd,
+        &VisualStyle::default(),
+    )
+}
+
+fn validate_timeline(cues: &[Cue], duration: f64, tempo: f64) -> Result<()> {
     ensure!(
         duration.is_finite() && duration > 0.0 && tempo.is_finite() && (0.5..=1.5).contains(&tempo),
         "映像の長さか速度が不正です。"
@@ -125,9 +137,47 @@ pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<
             .all(|c| c.seconds.is_finite() && c.seconds >= 0.0 && c.seconds < duration),
         "曲の長さを超える歌詞の時刻があります。"
     );
+    ensure!(
+        cues.windows(2)
+            .all(|pair| pair[0].seconds < pair[1].seconds),
+        "歌詞の時刻は昇順にしてください。"
+    );
+    Ok(())
+}
+
+pub fn make_ass_styled(
+    title: &str,
+    cues: &[Cue],
+    duration: f64,
+    tempo: f64,
+    preset: VideoPreset,
+    style: &VisualStyle,
+) -> Result<String> {
+    validate_timeline(cues, duration, tempo)?;
+    style.validate()?;
     let mut ass = String::from(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,Yu Gothic,44,&H00A4FFCE,&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,60,60,80,1\nStyle: Title,Yu Gothic,28,&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,2,0,8,60,60,32,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
     );
+    let (width, height) = preset.dimensions();
+    let scale = width as f64 / 1280.0;
+    ass = ass
+        .replace("PlayResX: 1280", &format!("PlayResX: {width}"))
+        .replace("PlayResY: 720", &format!("PlayResY: {height}"))
+        .replace(
+            "Yu Gothic,44",
+            &format!("{},{}", style.font, (44.0 * scale).round()),
+        )
+        .replace(
+            "Yu Gothic,28",
+            &format!("{},{}", style.font, (28.0 * scale).round()),
+        )
+        .replace("&H00A4FFCE", &style.ass_accent()?);
+    // Vertical safe areas reserve room for platform overlays; split long lines in LRC.
+    if matches!(preset, VideoPreset::Vertical) {
+        ass = ass
+            .replace("2,60,60,80,1", "2,80,160,320,1")
+            .replace("8,60,60,32,1", "8,80,160,160,1");
+    }
     ass.push_str(&format!(
         "Dialogue: 0,0:00:00.00,{},Title,,0,0,0,,{}\n",
         stamp(duration / tempo),
@@ -152,9 +202,67 @@ pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<
     Ok(ass)
 }
 
+/// Editable plain subtitles on the output timeline. Empty LRC cues end a line at rests.
+pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
+    validate_timeline(cues, duration, tempo)?;
+    fn stamp_srt(seconds: f64) -> String {
+        let ms = (seconds * 1000.0).round() as u64;
+        format!(
+            "{:02}:{:02}:{:02},{:03}",
+            ms / 3_600_000,
+            ms / 60_000 % 60,
+            ms / 1000 % 60,
+            ms % 1000
+        )
+    }
+    let mut result = String::new();
+    let mut number = 0;
+    for (index, cue) in cues.iter().enumerate() {
+        let end = cues.get(index + 1).map_or(duration, |c| c.seconds);
+        if cue.text.trim().is_empty() {
+            continue;
+        }
+        number += 1;
+        result.push_str(&format!(
+            "{number}\n{} --> {}\n{}\n\n",
+            stamp_srt(cue.seconds / tempo),
+            stamp_srt(end / tempo),
+            cue.text.replace('\r', "")
+        ));
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn blank_cues_end_subtitles_and_srt_uses_output_timeline() {
+        let cues = parse_lrc("[00:01.25]歌う\n[00:02.50]\n[00:04.00]また歌う\n[00:05.00]").unwrap();
+        assert_eq!(
+            make_srt(&cues, 6.0, 1.25).unwrap(),
+            "1\n00:00:01,000 --> 00:00:02,000\n歌う\n\n2\n00:00:03,200 --> 00:00:04,000\nまた歌う\n\n"
+        );
+        let ass = make_ass("曲", &cues, 6.0, 1.25).unwrap();
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:02.00,Lyrics"));
+        assert_eq!(
+            ass.lines()
+                .filter(|line| line.starts_with("Dialogue: 1,"))
+                .count(),
+            2
+        );
+        assert!(
+            make_srt(
+                &[Cue {
+                    seconds: f64::NAN,
+                    text: "不正".into()
+                }],
+                6.0,
+                1.0
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn lrc_multiple_stamps_offsets_and_duplicates() {
         let cues =

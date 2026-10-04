@@ -87,4 +87,6 @@ cargo test --locked
 
 FFmpegはPCに導入したものを呼び出し、このリポジトリやZIPには同梱しません。テスト用に確認した曲はHoliznaCC0の「There Ain't Nothin'」（CC0）です。曲や分離結果はGitHubに含めません。
 
-このリポジトリは非公開です。一般向けの販売・公開に向けた仕様は別途扱います。
+このリポジトリは非公開です。自作曲の歌詞動画・カラオケ制作の受注に向けた[サービス仕様](docs/service-spec.md)、[制作手順と残る不足](docs/production-workflow.md)、[依存先の版とライセンス](docs/dependencies.md)を保存しています。出品はオーナーの判断待ちです。
+
+制作者向けCLIでは `convert` に `--preset full-hd` または `--preset vertical`、`--style ./style.json` を付けられます。`render` は指定した完成音源や提供伴奏へ字幕を付け、音源分離なしで映像を作り直します。LRC・SRT・ASSも出力します。詳しい使い方は制作手順を参照してください。
