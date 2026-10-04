@@ -5,6 +5,41 @@ use karaoke_maker::{
 use std::fs;
 
 #[test]
+fn loud_audio_keeps_headroom_after_wav_mp3_and_aac_export() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 19000.0 / 44100.0).sin() * 0.97)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let original = fs::read(&source).unwrap();
+    let dir = temp.path().join("output");
+    fs::create_dir(&dir).unwrap();
+    media::write_stereo(&dir.join("instrumental-raw.wav"), &signal, &signal).unwrap();
+    media::write_stereo(&dir.join("vocals.wav"), &signal, &signal).unwrap();
+    let tools = Tools::discover();
+    assert!(media::true_peak(&tools, &source).unwrap() > -1.0);
+    media::export(
+        &tools,
+        &source,
+        &dir,
+        &media::probe(&tools, &source).unwrap(),
+        &Options::default(),
+        2.0,
+        &Progress::default(),
+    )
+    .unwrap();
+    assert!(media::true_peak(&tools, &dir.join("karaoke.wav")).unwrap() <= -3.0);
+    for name in ["karaoke.mp3", "karaoke.mp4"] {
+        assert!(
+            media::true_peak(&tools, &dir.join(name)).unwrap() < 0.0,
+            "{name}"
+        );
+    }
+    assert_eq!(fs::read(source).unwrap(), original);
+}
+
+#[test]
 fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_model() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.wav");
@@ -180,6 +215,98 @@ fn old_settings_keep_hd_output_and_invalid_style_is_rejected() {
             "{style}"
         );
     }
+}
+
+#[test]
+fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
+    use karaoke_maker::{presentation::VideoPreset, revision};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let signal: Vec<f32> = (0..44100 * 4)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 261.6256 / 44100.0).sin() * 0.2)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let previous = temp.path().join("previous");
+    fs::create_dir(&previous).unwrap();
+    media::write_stereo(&previous.join("instrumental-raw.wav"), &signal, &signal).unwrap();
+    media::write_stereo(&previous.join("vocals.wav"), &signal, &signal).unwrap();
+    let tools = Tools::discover();
+    let options = Options {
+        key: 3,
+        tempo: 1.25,
+        lyrics: "[00:00.50]before\n[00:02.00]next".into(),
+        ..Options::default()
+    };
+    media::export(
+        &tools,
+        &source,
+        &previous,
+        &media::probe(&tools, &source).unwrap(),
+        &options,
+        4.0,
+        &Progress::default(),
+    )
+    .unwrap();
+    fs::write(
+        previous.join("settings.json"),
+        serde_json::to_vec(&options).unwrap(),
+    )
+    .unwrap();
+    let before_audio = fs::read(previous.join("karaoke.wav")).unwrap();
+    let before_video = fs::read(previous.join("karaoke.mp4")).unwrap();
+    assert_eq!(
+        revision::editable_lrc(&options).unwrap(),
+        "[00:00.40]before\n[00:01.60]next\n"
+    );
+    let revised = temp.path().join("revised");
+    fs::create_dir(&revised).unwrap();
+    revision::render_revision(
+        &previous,
+        &revised,
+        "[00:00.40]corrected\n[00:01.60]\n",
+        VideoPreset::FullHd,
+        &Progress::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(previous.join("karaoke.wav")).unwrap(),
+        before_audio
+    );
+    assert_eq!(
+        fs::read(previous.join("karaoke.mp4")).unwrap(),
+        before_video
+    );
+    assert!(
+        (media::probe(&tools, &revised.join("karaoke.wav"))
+            .unwrap()
+            .duration
+            - 3.2)
+            .abs()
+            < 0.01
+    );
+    assert!(
+        (media::probe(&tools, &revised.join("vocals.wav"))
+            .unwrap()
+            .duration
+            - 3.2)
+            .abs()
+            < 0.02
+    );
+    let mut reader = hound::WavReader::open(revised.join("karaoke.wav")).unwrap();
+    let samples: Vec<i32> = reader
+        .samples::<i32>()
+        .map(Result::unwrap)
+        .step_by(2)
+        .collect();
+    let center = &samples[22050..samples.len() - 22050];
+    let crossings = center.windows(2).filter(|p| p[0] <= 0 && p[1] > 0).count();
+    let frequency = crossings as f64 / (center.len() as f64 / 44100.0);
+    assert!((frequency - 311.1269).abs() < 1.5, "{frequency}");
+    assert!(!temp.path().join("models").exists());
+    assert_eq!(
+        fs::read_to_string(revised.join("lyrics.srt")).unwrap(),
+        "1\n00:00:00,400 --> 00:00:01,600\ncorrected\n\n"
+    );
 }
 
 #[test]
