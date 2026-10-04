@@ -482,6 +482,11 @@ async fn job_page(State(app): State<App>, WebPath(id): WebPath<String>) -> Respo
     let mut body = format!("<h1>{}</h1>", escape(&job.record.title));
     let running = job.record.status == "running";
     if job.record.status == "done" {
+        let has_lyrics = fs::read_to_string(app.directory(&id).unwrap().join("lyrics.lrc"))
+            .is_ok_and(|lrc| !lrc.trim().is_empty());
+        if !has_lyrics {
+            body.push_str("<p class=\"hint\">歌詞字幕はまだありません。現行版では歌詞の自動聞き取りを行いません。下の欄へ時刻付きの歌詞を入れ、動画を作り直してください。</p>");
+        }
         body.push_str(&format!(r#"<p class="status">音源と映像ができました。</p><video controls preload="metadata" src="/jobs/{id}/karaoke.mp4"></video><div class="actions"><a class="button" download href="/jobs/{id}/karaoke.mp4">映像を保存（MP4）</a><a class="button secondary" download href="/jobs/{id}/karaoke.mp3">音源を保存（MP3）</a><a class="button secondary" download href="/jobs/{id}/karaoke.wav">音源を保存（WAV）</a></div><h2>伴奏を聴く</h2><audio controls preload="none" src="/jobs/{id}/karaoke.mp3"></audio><details><summary>分離した歌声を確認する</summary><audio controls preload="none" src="/jobs/{id}/vocals.wav"></audio><a download href="/jobs/{id}/vocals.wav">歌声だけを保存</a></details>"#));
         if let Ok(options) =
             fs::read(app.directory(&id).unwrap().join("settings.json")).and_then(|bytes| {

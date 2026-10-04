@@ -459,25 +459,14 @@ pub fn export(
         )?;
     }
     let pitch = 2.0_f64.powf(options.key as f64 / 12.0);
-    run(
-        tools,
-        dir,
-        &[
-            "-i".into(),
-            "instrumental-raw.wav".into(),
-            "-af".into(),
-            format!(
-                "rubberband=tempo={}:pitch={pitch}:channels=together,alimiter=limit=0.98:level=false:latency=true",
-                options.tempo
-            ),
-            "-c:a".into(),
-            "pcm_s24le".into(),
-            "-ar".into(),
-            options.sample_rate.to_string(),
-            "karaoke.wav".into(),
-        ],
-        progress,
-    )?;
+    let mut audio_args = vec!["-i".into(), "instrumental-raw.wav".into()];
+    // At the original key/speed, avoid phase-vocoder and limiter processing.
+    // Peak safety is still measured and handled by preserve_headroom below.
+    if options.key != 0 || options.tempo != 1.0 {
+        audio_args.extend(["-af".into(),format!("rubberband=tempo={}:pitch={pitch}:channels=together,alimiter=limit=0.98:level=false:latency=true",options.tempo)]);
+    }
+    audio_args.extend(["-c:a".into(), "pcm_s24le".into(), "-ar".into(),options.sample_rate.to_string(),"karaoke.wav".into()]);
+    run(tools, dir, &audio_args, progress)?;
     preserve_headroom(tools, dir, progress)?;
     run(
         tools,
