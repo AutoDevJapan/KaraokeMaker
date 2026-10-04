@@ -89,4 +89,4 @@ FFmpegはPCに導入したものを呼び出し、このリポジトリやZIPに
 
 このリポジトリは非公開です。自作曲の歌詞動画・カラオケ制作の受注に向けた[サービス仕様](docs/service-spec.md)、[制作手順と残る不足](docs/production-workflow.md)、[依存先の版とライセンス](docs/dependencies.md)を保存しています。出品はオーナーの判断待ちです。
 
-制作者向けCLIでは `convert` に `--preset full-hd` または `--preset vertical`、`--style ./style.json` を付けられます。`render` は指定した完成音源や提供伴奏へ字幕を付け、音源分離なしで映像を作り直します。LRC・SRT・ASSも出力します。詳しい使い方は制作手順を参照してください。
+制作者向けCLIでは `convert` と `render` に `--preset 1080p`、`--preset 1440p`、`--preset 4k`（3840×2160）、`--preset vertical`、`--style ./style.json` を付けられます。`render` は指定した完成音源や提供伴奏へ字幕を付け、音源分離なしで映像を作り直します。LRC・SRT・ASSも出力します。詳しい使い方は制作手順を参照してください。

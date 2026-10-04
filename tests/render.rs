@@ -23,7 +23,9 @@ fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_mode
     let data = temp.path().join("data");
     let output = temp.path().join("results");
     for (preset, width, height, text) in [
-        ("full-hd", 1920, 1080, "first"),
+        ("1080p", 1920, 1080, "first"),
+        ("1440p", 2560, 1440, "qhd"),
+        ("4k", 3840, 2160, "uhd"),
         ("vertical", 1080, 1920, "revised"),
     ] {
         fs::write(&lrc, format!("[00:00.10]{text}\n[00:00.80]\n")).unwrap();
@@ -78,7 +80,7 @@ fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_mode
         assert!(ass.contains(&format!("PlayResX: {width}")));
         assert!(ass.contains(&format!("PlayResY: {height}")));
     }
-    assert_eq!(fs::read_dir(output).unwrap().count(), 2);
+    assert_eq!(fs::read_dir(output).unwrap().count(), 4);
     assert_eq!(fs::read(&source).unwrap(), original);
     assert!(!data.join("models").exists());
 }

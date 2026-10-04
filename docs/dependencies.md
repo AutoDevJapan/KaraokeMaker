@@ -20,7 +20,7 @@
 | sha2 | 0.10.9 | MIT OR Apache-2.0 |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tokio | 1.53.2 | MIT |
-| tokio-tungstenite | 0.29.0 | MIT |
+| tokio-tungstenite | 0.28.0 | MIT |
 | tokio-util | 0.7.19 | MIT |
 | tower | 0.5.3 | MIT |
 | uuid | 1.26.1 | Apache-2.0 OR MIT |

@@ -358,6 +358,7 @@ pub fn export(
     progress.set("カラオケ映像を作っています。");
     let mut args = Vec::<String>::new();
     let (width, height) = options.preset.dimensions();
+    let (crf, maxrate, bufsize) = options.preset.encoding();
     let background = &options.style.background;
     if source.video && options.original_video {
         args.extend([
@@ -384,7 +385,8 @@ pub fn export(
         "-map".into(), "1:a:0".into(), "-vf".into(),
         format!("setpts=PTS/{},scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{background},setsar=1,tpad=stop_mode=clone:stop_duration=1800,ass=lyrics.ass",options.tempo),
         "-c:v".into(), "libx264".into(), "-preset".into(), "fast".into(),
-        "-crf".into(), "20".into(), "-pix_fmt".into(), "yuv420p".into(),
+        "-crf".into(), crf.to_string(), "-maxrate".into(), maxrate.into(),
+        "-bufsize".into(), bufsize.into(), "-pix_fmt".into(), "yuv420p".into(),
         "-r".into(), "30".into(),
         "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(),
         "-t".into(), format!("{:.6}",duration/options.tempo),

@@ -20,9 +20,11 @@
 
 ```powershell
 karaoke-maker-cli --data ./work-data convert ./source/song.wav --output ./renders/separation --title "曲名" --lyrics ./edit/song.lrc --preset full-hd --background
-karaoke-maker-cli --data ./work-data render ./source/song.wav --output ./renders/lyric-video --title "曲名" --lyrics ./edit/song.lrc --preset full-hd --style ./edit/style.json --background
+karaoke-maker-cli --data ./work-data render ./source/song.wav --output ./renders/lyric-video --title "曲名" --lyrics ./edit/song.lrc --preset 1080p --style ./edit/style.json --background
 karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --output ./renders/karaoke --title "曲名" --lyrics ./edit/song.lrc --preset full-hd --style ./edit/style.json --background
 karaoke-maker-cli --data ./work-data render ./source/song.wav --output ./renders/vertical --title "曲名" --lyrics ./edit/song-vertical.lrc --preset vertical --style ./edit/style.json --background
+karaoke-maker-cli --data ./work-data render ./source/song.wav --output ./renders/lyric-4k --title "曲名" --lyrics ./edit/song.lrc --preset 4k --style ./edit/style.json --background
+karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --output ./renders/karaoke-4k --title "曲名" --lyrics ./edit/song.lrc --preset 4k --style ./edit/style.json --background
 ```
 
 各実行は新しいIDのフォルダを作り、場所を表示する。`render` はGPUモデル不要。歌入り動画もアプリ内の出力名は `karaoke.mp4` なので、納品コピーは `song-lyric.mp4`、伴奏版は `song-karaoke.mp4` に名前を付ける。元音源の名前を変えない。採用した出力フォルダと `settings.json` を案件に記録する。
@@ -61,12 +63,14 @@ karaoke-maker-cli --data ./work-data render ./source/song.wav --output ./renders
 
 ## 今回実装した小さな不足
 
-- CLIの `--preset hd/full-hd/vertical` で720p・横1080p・縦1080pを選べる。30fpsを固定し、字幕のキャンバス・文字サイズ・縦の余白を合わせる。既存画面と古い保存設定は720pを保持する。
+- CLIの `--preset hd/1080p/1440p/4k/vertical` で720p・横1080p・横1440p・横4K・縦1080pを選べる。`full-hd` も1080pの別名として使える。30fpsを固定し、字幕のキャンバス・文字サイズ・輪郭・余白を合わせる。映像を拡大した後でlibassが文字を直接描画する。既存画面と古い保存設定は720pを保持する。
 - `--style` で背景色・字幕の強調色・フォントを案件別に保存できる。
 - `render` で完成音源や提供伴奏を字幕付き動画にし、音源分離なしで修正版を作れる。
 - LRCを原曲時刻で、SRT/ASSを出力時刻で保存できる。空のLRC行で間奏の表示を終えられる。
 
 新しいRust依存は追加していない。新機能は制作者のCLI向けで、画面からの編集UIは今後の項目。
+
+1440p/4K指定時の形式検品では上の1080p解像度の条件を、それぞれ2560×1440/3840×2160へ置き換える。品質と容量に応じた設定・書き出しの測定結果は [4k-validation.md](4k-validation.md) を参照する。歌入り・伴奏の両方で指定解像度を確認する。
 
 ## 残る不足と暫定運用
 

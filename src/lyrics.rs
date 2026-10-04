@@ -155,29 +155,25 @@ pub fn make_ass_styled(
 ) -> Result<String> {
     validate_timeline(cues, duration, tempo)?;
     style.validate()?;
-    let mut ass = String::from(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,Yu Gothic,44,&H00A4FFCE,&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,60,60,80,1\nStyle: Title,Yu Gothic,28,&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,2,0,8,60,60,32,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
-    );
     let (width, height) = preset.dimensions();
     let scale = width as f64 / 1280.0;
-    ass = ass
-        .replace("PlayResX: 1280", &format!("PlayResX: {width}"))
-        .replace("PlayResY: 720", &format!("PlayResY: {height}"))
-        .replace(
-            "Yu Gothic,44",
-            &format!("{},{}", style.font, (44.0 * scale).round()),
-        )
-        .replace(
-            "Yu Gothic,28",
-            &format!("{},{}", style.font, (28.0 * scale).round()),
-        )
-        .replace("&H00A4FFCE", &style.ass_accent()?);
-    // Vertical safe areas reserve room for platform overlays; split long lines in LRC.
-    if matches!(preset, VideoPreset::Vertical) {
-        ass = ass
-            .replace("2,60,60,80,1", "2,80,160,320,1")
-            .replace("8,60,60,32,1", "8,80,160,160,1");
-    }
+    let scaled = |value: f64| (value * scale).round() as u32;
+    let (left, right, bottom, top) = if matches!(preset, VideoPreset::Vertical) {
+        (80, 160, 320, 160)
+    } else {
+        (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
+    };
+    let font = &style.font;
+    let accent = style.ass_accent()?;
+    let lyric_size = scaled(44.0);
+    let title_size = scaled(28.0);
+    let outline = scaled(3.0);
+    let title_outline = scaled(2.0);
+    let shadow = scaled(1.0);
+    // libass rasterizes the vector glyphs after scaling the video to the target size.
+    let mut ass = format!(
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{left},{right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    );
     ass.push_str(&format!(
         "Dialogue: 0,0:00:00.00,{},Title,,0,0,0,,{}\n",
         stamp(duration / tempo),

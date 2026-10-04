@@ -7,7 +7,12 @@ use serde::{Deserialize, Serialize};
 pub enum VideoPreset {
     #[default]
     Hd,
+    #[value(name = "1080p", alias = "full-hd")]
     FullHd,
+    #[value(name = "1440p")]
+    Qhd,
+    #[value(name = "4k")]
+    Uhd,
     Vertical,
 }
 
@@ -16,7 +21,19 @@ impl VideoPreset {
         match self {
             Self::Hd => (1280, 720),
             Self::FullHd => (1920, 1080),
+            Self::Qhd => (2560, 1440),
+            Self::Uhd => (3840, 2160),
             Self::Vertical => (1080, 1920),
+        }
+    }
+
+    /// Constrained quality: static backgrounds stay small, detailed video gets more bits.
+    pub fn encoding(self) -> (u32, &'static str, &'static str) {
+        match self {
+            Self::Hd => (20, "8M", "16M"),
+            Self::FullHd | Self::Vertical => (20, "12M", "24M"),
+            Self::Qhd => (18, "20M", "40M"),
+            Self::Uhd => (18, "40M", "80M"),
         }
     }
 }
