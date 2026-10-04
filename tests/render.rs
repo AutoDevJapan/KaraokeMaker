@@ -26,6 +26,7 @@ fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_mode
         ("1080p", 1920, 1080, "first"),
         ("1440p", 2560, 1440, "qhd"),
         ("4k", 3840, 2160, "uhd"),
+        ("vertical-4k", 2160, 3840, "vertical-uhd"),
         ("vertical", 1080, 1920, "revised"),
     ] {
         fs::write(&lrc, format!("[00:00.10]{text}\n[00:00.80]\n")).unwrap();
@@ -79,6 +80,10 @@ fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_mode
         assert!(ass.contains("&H00efcdab"));
         assert!(ass.contains(&format!("PlayResX: {width}")));
         assert!(ass.contains(&format!("PlayResY: {height}")));
+        if preset == "vertical-4k" {
+            assert!(ass.contains(",2,160,320,640,1"));
+            assert!(ass.contains(",8,160,320,320,1"));
+        }
         // Inspect decoded pixels in the lyric area: dimensions and sidecar files alone
         // would still pass if the ASS filter were accidentally removed.
         let frame = media::hidden_command(Tools::discover().ffmpeg)
@@ -110,7 +115,7 @@ fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_mode
             "字幕の明るい画素がありません: {preset}: {bright}"
         );
     }
-    assert_eq!(fs::read_dir(output).unwrap().count(), 4);
+    assert_eq!(fs::read_dir(output).unwrap().count(), 5);
     assert_eq!(fs::read(&source).unwrap(), original);
     assert!(!data.join("models").exists());
 }
