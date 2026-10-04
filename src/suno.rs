@@ -102,7 +102,8 @@ impl Broker {
         let todo = task.todo_id.context(
             "担当の作業番号がありません。新しい曲は生成せず、受付の履歴を確認してください。",
         )?;
-        let data = self.post("delegate", json!({"id":todo, "prompt":worker_prompt(project, &task.id)?, "request_id":format!("suno-browser:{project}:{}", task.id)})).await?;
+        // Console adds its internal manual: prefix; the supplied ID excludes colons.
+        let data = self.post("delegate", json!({"id":todo, "prompt":worker_prompt(project, &task.id)?, "request_id":format!("suno-browser-{project}-{}", task.id)})).await?;
         ensure!(
             data["accepted"] == true && data.get("suppressed_reason").is_none_or(|v| v.is_null()),
             "担当の受付を完了できませんでした。保存した要求の状態を確認してください。"
@@ -142,6 +143,13 @@ mod tests {
                 post(move |Json(body): Json<Value>| {
                     let seen = seen.clone();
                     async move {
+                        let id = body["request_id"].as_str().unwrap();
+                        assert!(
+                            id.len() <= 100
+                                && id
+                                    .bytes()
+                                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                        );
                         seen.lock().unwrap().push(body);
                         Json(json!({"ok":true,"data":{"accepted":true}}))
                     }
@@ -173,7 +181,7 @@ mod tests {
         assert_eq!(bodies[0]["id"], 123);
         assert_eq!(
             bodies[0]["request_id"],
-            "suno-browser:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002"
+            "suno-browser-00000000-0000-4000-8000-000000000001-00000000-0000-4000-8000-000000000002"
         );
         drop(bodies);
         worker.abort();
