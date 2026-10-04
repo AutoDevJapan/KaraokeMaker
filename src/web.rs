@@ -295,6 +295,7 @@ async fn home(State(app): State<App>) -> Html<String> {
     <label for="title">曲名（任意）</label><input id="title" name="title" type="text" maxlength="120" placeholder="空欄ならファイル名を使います">
     <div class="row"><div><label for="key">キー</label><input id="key" name="key" type="number" min="-6" max="6" value="0"><p class="hint">半音単位。0で元のキー。</p></div><div><label for="tempo">速度</label><input id="tempo" name="tempo" type="number" min="0.5" max="1.5" step="0.05" value="1"><p class="hint">1で元の速度。0.8でゆっくり。</p></div></div>
     <label for="video">映像</label><select id="video" name="video"><option value="original">元の動画を使う（音楽だけなら背景を付ける）</option><option value="background">落ち着いた背景にする</option></select>
+    <label for="preset">出力解像度</label><select id="preset" name="preset"><option value="hd" selected>HD（1280×720）</option><option value="1080p">フルHD（1920×1080）</option><option value="1440p">1440p（2560×1440）</option><option value="4k">4K（3840×2160）</option><option value="vertical">縦長フルHD（1080×1920）</option><option value="vertical-4k">縦長4K（2160×3840）</option></select><p class="hint">4Kは処理時間と容量が増えます。原本の細部は拡大しても増えません。</p>
     <details><summary>時刻付きの歌詞を載せる（任意）</summary><label for="lyrics">歌詞</label><textarea id="lyrics" name="lyrics" maxlength="65536" placeholder="[00:12.34]最初の歌詞&#10;[00:18.00]次の歌詞"></textarea><p class="hint">LRC形式で貼り付けます。表示中の行を色で追い、速度を変えると歌詞の時刻も合わせます。歌詞の自動聞き取りはありません。</p></details>
     <button type="submit">カラオケを作る</button><p class="hint">曲の長さとPCの性能によって、数分以上かかります。</p></form>
     <h2>作ったカラオケ</h2>{}<form action="/shutdown" method="post" style="margin-top:32px"><input type="hidden" name="csrf" value="{}"><button class="secondary" type="submit">アプリを終了する</button></form>"#,
@@ -437,6 +438,13 @@ async fn receive(app: &App, dir: &Path, multipart: &mut Multipart) -> Result<Opt
                     options.original_video = value == "original";
                 }
                 "lyrics" => options.lyrics = value,
+                "preset" => {
+                    options.preset =
+                        <crate::presentation::VideoPreset as clap::ValueEnum>::from_str(
+                            &value, false,
+                        )
+                        .map_err(|_| anyhow::anyhow!("出力解像度を選んでください。"))?
+                }
                 _ => anyhow::bail!("読み取れない項目が届きました。"),
             }
         }
@@ -627,6 +635,39 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+    #[tokio::test]
+    async fn web_resolution_select_is_received_and_invalid_values_are_rejected() {
+        use axum::extract::FromRequest;
+        let temp = tempfile::tempdir().unwrap();
+        let app = App::new(temp.path(), 19531).unwrap();
+        let page = home(State(app.clone())).await;
+        let html = page.0;
+        assert!(html.contains("value=\"4k\""));
+        assert!(html.contains("value=\"vertical-4k\""));
+        for (index, preset, expected) in [
+            (0, "4k", Some((3840, 2160))),
+            (1, "vertical-4k", Some((2160, 3840))),
+            (2, "8k", None),
+        ] {
+            let dir = temp.path().join(format!("parse{index}"));
+            fs::create_dir(&dir).unwrap();
+            let body = format!(
+                "--testboundary\r\nContent-Disposition: form-data; name=\"csrf\"\r\n\r\n{}\r\n--testboundary\r\nContent-Disposition: form-data; name=\"preset\"\r\n\r\n{preset}\r\n--testboundary\r\nContent-Disposition: form-data; name=\"media\"; filename=\"demo.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFFtestdata\r\n--testboundary--\r\n",
+                app.csrf
+            );
+            let req = Request::builder()
+                .method("POST")
+                .header("content-type", "multipart/form-data; boundary=testboundary")
+                .body(Body::from(body))
+                .unwrap();
+            let mut multipart = Multipart::from_request(req, &()).await.unwrap();
+            let parsed = receive(&app, &dir, &mut multipart).await;
+            match expected {
+                Some(d) => assert_eq!(parsed.unwrap().preset.dimensions(), d),
+                None => assert!(parsed.is_err()),
+            }
+        }
+    }
     #[tokio::test]
     async fn malicious_host_or_origin_and_missing_token_cannot_modify_jobs() {
         let temp = tempfile::tempdir().unwrap();

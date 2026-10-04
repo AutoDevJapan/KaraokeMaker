@@ -14,6 +14,8 @@ pub enum VideoPreset {
     #[value(name = "4k")]
     Uhd,
     Vertical,
+    #[value(name = "vertical-4k")]
+    VerticalUhd,
 }
 
 impl VideoPreset {
@@ -24,6 +26,7 @@ impl VideoPreset {
             Self::Qhd => (2560, 1440),
             Self::Uhd => (3840, 2160),
             Self::Vertical => (1080, 1920),
+            Self::VerticalUhd => (2160, 3840),
         }
     }
 
@@ -33,7 +36,7 @@ impl VideoPreset {
             Self::Hd => (20, "8M", "16M"),
             Self::FullHd | Self::Vertical => (20, "12M", "24M"),
             Self::Qhd => (18, "20M", "40M"),
-            Self::Uhd => (18, "40M", "80M"),
+            Self::Uhd | Self::VerticalUhd => (18, "40M", "80M"),
         }
     }
 }
