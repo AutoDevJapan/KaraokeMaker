@@ -4,6 +4,7 @@ pub mod lyrics;
 pub mod media;
 pub mod model;
 pub mod music;
+mod music_import;
 pub mod ocr;
 pub mod presentation;
 pub mod quality;
