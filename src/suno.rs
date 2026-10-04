@@ -148,7 +148,7 @@ mod tests {
                             id.len() <= 100
                                 && id
                                     .bytes()
-                                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                                    .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
                         );
                         seen.lock().unwrap().push(body);
                         Json(json!({"ok":true,"data":{"accepted":true}}))
