@@ -44,7 +44,7 @@ enum Mode {
         /// JSON with background/accent RGB colors and an installed font name.
         #[arg(long)]
         style: Option<PathBuf>,
-        #[arg(long,value_enum,default_value_t=crate::model::SeparationModel::Standard)]
+        #[arg(long,value_enum,default_value_t=crate::model::SeparationModel::MelBandFp16)]
         separation: crate::model::SeparationModel,
         #[arg(long)]
         words: Option<PathBuf>,
@@ -97,6 +97,13 @@ enum Mode {
         #[arg(long)]
         output: PathBuf,
     },
+    MeasureAudio {
+        input: PathBuf,
+    },
+    CheckRuntime {
+        #[arg(long)]
+        gpu_first: bool,
+    },
 }
 pub fn main() {
     let result = std::thread::Builder::new()
@@ -134,6 +141,50 @@ fn run() -> Result<()> {
         port: 19531,
         no_open: false,
     }) {
+        Mode::CheckRuntime { gpu_first } => {
+            #[cfg(feature = "ort")]
+            {
+                let cpu = || -> Result<()> {
+                    use ort::{session::Session, value::Tensor};
+                    crate::runtime::initialize(false)?;
+                    let mut session = Session::builder()?
+                        .commit_from_file("D:/CC/Tools/forced-align/models/model_quantized.onnx")?;
+                    let _=session.run(ort::inputs!["input_values"=>Tensor::from_array(([1,16000],vec![0f32;16000]))?])?;
+                    Ok(())
+                };
+                let gpu = || -> Result<()> {
+                    let signal: Vec<f32> =
+                        (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+                    let _ = crate::model::separate_using(
+                        &signal,
+                        &signal,
+                        &data.join("models"),
+                        crate::model::SeparationModel::MelBandFp16,
+                        &Progress::default(),
+                    )?;
+                    Ok(())
+                };
+                if gpu_first {
+                    gpu()?;
+                    cpu()?;
+                } else {
+                    cpu()?;
+                    gpu()?;
+                }
+                println!("CPUとCUDAを同じプロセスで利用できました。");
+            }
+            #[cfg(not(feature = "ort"))]
+            {
+                let _ = gpu_first;
+                anyhow::bail!("このビルドにはONNX接続がありません。");
+            }
+        }
+        Mode::MeasureAudio { input } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crate::quality::measure(&input)?)?
+            );
+        }
         Mode::ReadSubtitleFrames { folder, output } => {
             use std::io::Write;
             let result = crate::ocr::read_folder(&folder)?;
@@ -171,6 +222,7 @@ fn run() -> Result<()> {
                 &fs::read_to_string(lyrics)?,
                 &model,
                 &vocab,
+                &Progress::default(),
             )?;
             use std::io::Write;
             let mut file = fs::OpenOptions::new()

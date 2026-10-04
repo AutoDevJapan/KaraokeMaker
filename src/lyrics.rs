@@ -156,7 +156,8 @@ pub fn make_ass_words(
         let mut last = first + 1;
         let mut count = words[first].text.chars().count();
         while last < words.len()
-            && words[last].start - words[first].start < 2.5
+            && words[last].line_index == words[first].line_index
+            && words[last].start - words[first].start < 4.0
             && count + words[last].text.chars().count() < 36
         {
             count += words[last].text.chars().count();
@@ -171,7 +172,7 @@ pub fn make_ass_words(
                 .map_or(word.end, |w| w.start)
                 .max(word.start + 0.01);
             let fill = ((next - word.start) / tempo * 100.0).round().max(1.0) as u64;
-            let spacing = if word.text.is_ascii() && n > 0 {
+            let spacing = if word.text.is_ascii() && n > 0 && !word.join_previous {
                 " "
             } else {
                 ""
@@ -195,7 +196,8 @@ pub fn word_cues(words: &[crate::alignment::Word]) -> Vec<Cue> {
         let mut last = first + 1;
         let mut length = words[first].text.chars().count();
         while last < words.len()
-            && words[last].start - words[first].start < 2.5
+            && words[last].line_index == words[first].line_index
+            && words[last].start - words[first].start < 4.0
             && length + words[last].text.chars().count() < 36
         {
             length += words[last].text.chars().count();
@@ -207,7 +209,11 @@ pub fn word_cues(words: &[crate::alignment::Word]) -> Vec<Cue> {
             .map(|(n, w)| {
                 format!(
                     "{}{}",
-                    if n > 0 && w.text.is_ascii() { " " } else { "" },
+                    if n > 0 && w.text.is_ascii() && !w.join_previous {
+                        " "
+                    } else {
+                        ""
+                    },
                     w.text
                 )
             })
@@ -262,8 +268,9 @@ fn validate_timeline(cues: &[Cue], duration: f64, tempo: f64) -> Result<()> {
         "映像の長さか速度が不正です。"
     );
     ensure!(
-        cues.iter()
-            .all(|c| c.seconds.is_finite() && c.seconds >= 0.0 && c.seconds < duration),
+        cues.iter().all(|c| c.seconds.is_finite()
+            && c.seconds >= 0.0
+            && (c.seconds < duration || c.text.trim().is_empty() && c.seconds <= duration + 0.02)),
         "曲の長さを超える歌詞の時刻があります。"
     );
     ensure!(
@@ -346,7 +353,10 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
     let mut result = String::new();
     let mut number = 0;
     for (index, cue) in cues.iter().enumerate() {
-        let end = cues.get(index + 1).map_or(duration, |c| c.seconds);
+        let end = cues
+            .get(index + 1)
+            .map_or(duration, |c| c.seconds)
+            .min(duration);
         if cue.text.trim().is_empty() {
             continue;
         }
@@ -364,6 +374,15 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn blank_at_song_end_is_editable_and_does_not_extend_srt() {
+        let cues = parse_lrc("[00:01.00]end\n[00:10.00]\n").unwrap();
+        assert_eq!(
+            make_srt(&cues, 10.0, 1.0).unwrap(),
+            "1\n00:00:01,000 --> 00:00:10,000\nend\n\n"
+        );
+        assert!(make_ass("song", &cues, 10.0, 1.0).is_ok());
+    }
     #[test]
     fn blank_cues_end_subtitles_and_srt_uses_output_timeline() {
         let cues = parse_lrc("[00:01.25]歌う\n[00:02.50]\n[00:04.00]また歌う\n[00:05.00]").unwrap();

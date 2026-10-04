@@ -7,14 +7,14 @@
 ## できること
 
 - MP3・WAV・FLAC・M4A・MP4などを画面から読み込む。
-- AIで歌声と伴奏を分け、伴奏をWAV・MP3で保存する。
+- AIで歌声と伴奏を分け、伴奏を48kHz・24bitのWAVと320kbpsのMP3で保存する。高音質のMel-Band RoFormerと比較用のDemucsを選べます。
 - 元の動画または背景を使い、HD・フルHD・1440p・横長4K（3840×2160）・縦長4K（2160×3840）のMP4を作る。画面の「出力解像度」で選べます。4Kは処理時間と容量が増えます。原本の細部は拡大しても増えません。
 - キーを半音単位で-6〜+6、速度を0.5〜1.5倍にする。
 - 任意の時刻付き歌詞を貼り付け、表示中の行を色で追う。速度を変えると映像・歌詞の時刻も合わせる。
 - 完成した曲の画面から歌詞・時刻を直し、音源分離なしで背景付きの動画を作り直す。前の結果も残る。
 - 作った結果を次回の起動後も開く。処理の取り消しやアプリ内の結果の削除もできる。
 
-対象は1曲15分・1GBまで。曲によって歌声やコーラスが残り、楽器の音にも影響が出ます。歌詞の自動聞き取りや単語ごとの自動同期は、現在の版にはありません。
+対象は1曲15分・1GBまで。曲によって歌声やコーラスが残り、楽器の音にも影響が出ます。正本の歌詞・LRC・単語の時刻を使って字幕を作れます。歌詞がない場合の聞き取りは確認用の候補です。メタルの叫び声など、時刻を確定できない場合は正本を残し、修正が必要だと表示します。
 
 ## Windowsで使う
 
@@ -86,7 +86,7 @@ cargo test --locked
 - `src/lyrics.rs`: LRCを読み込み、映像に表示する字幕を作る。
 - `vendor/demucs-core`: [demucs-rs](https://github.com/nikhilunni/demucs-rs)のRust製HTDemucs実装。Apache-2.0のライセンスと固定した版を同梱。
 
-分離モデルは [set-soft/audio_separation](https://huggingface.co/set-soft/audio_separation) の `Demucs/htdemucs.safetensors` を使います。元の[Demucs](https://github.com/facebookresearch/demucs)はMITライセンスです。モデルの期待するSHA-256はソースに固定し、変更されたファイルを自動では採用しません。
+標準の分離はKimのMel-Band RoFormerをRustとONNX Runtime/CUDAで実行します。モデル・実行部品の固定版と利用条件は[依存先一覧](docs/dependencies.md)に記録します。Demucsは比較用として保持します。コードのライセンスとモデルの利用条件を分けて扱い、全モデルのSHA-256を照合します。
 
 FFmpegはPCに導入したものを呼び出し、このリポジトリやZIPには同梱しません。テスト用に確認した曲はHoliznaCC0の「There Ain't Nothin'」（CC0）です。曲や分離結果はGitHubに含めません。
 

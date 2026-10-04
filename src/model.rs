@@ -8,11 +8,11 @@ use std::{fs, io::Read, path::Path, time::Duration};
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, ValueEnum, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum SeparationModel {
-    #[default]
     Standard,
     FineTuned,
     FineTunedResidual,
     MelBand,
+    #[default]
     MelBandFp16,
 }
 

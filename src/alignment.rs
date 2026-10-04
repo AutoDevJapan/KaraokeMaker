@@ -9,6 +9,22 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         .chars()
         .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
         .collect();
+    let mut joins = Vec::new();
+    let mut line_indices = Vec::new();
+    let mut line_index = 0;
+    let mut adjacent = false;
+    for c in reference.chars() {
+        if c == '\n' {
+            line_index += 1;
+        }
+        if c.is_whitespace() {
+            adjacent = false;
+        } else if !c.is_ascii_punctuation() {
+            joins.push(adjacent);
+            line_indices.push(line_index);
+            adjacent = true;
+        }
+    }
     let mut timed = Vec::<(char, f64, f64)>::new();
     let segments = transcript["transcription"]
         .as_array()
@@ -28,12 +44,23 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
                 .as_f64()
                 .filter(|&v| v >= 0.0)
                 .map(|v| v / 100.0);
-            let center = dtw.unwrap_or((from + to) / 2.0);
-            for c in text
+            let center = dtw
+                .filter(|&point| point >= from && point <= to)
+                .unwrap_or((from + to) / 2.0);
+            let letters: Vec<char> = text
                 .chars()
                 .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
-            {
-                timed.push((c, center, (to - from).max(0.02)));
+                .collect();
+            for (index, &c) in letters.iter().enumerate() {
+                let span = (to - from).max(0.02);
+                let start = (center - span / 2.0).max(from).max(0.0);
+                let end = (center + span / 2.0).min(to).max(start + 0.002);
+                let width = (end - start) / letters.len() as f64;
+                timed.push((
+                    c,
+                    start + width * index as f64,
+                    start + width * (index + 1) as f64,
+                ));
             }
         }
     }
@@ -76,40 +103,52 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         matches as f64 / chars.len() as f64 > 0.3,
         "歌詞と歌声の対応が少なすぎます。時刻付き歌詞で修正してください。"
     );
-    let mut centers = vec![0.0f64; chars.len()];
+    let mut intervals = vec![(0.0f64, 0.0f64); chars.len()];
     for n in 0..chars.len() {
-        centers[n] = if let Some(k) = mapped[n] {
-            timed[k].1
+        intervals[n] = if let Some(k) = mapped[n] {
+            (timed[k].1, timed[k].2)
         } else {
             let previous = (0..n)
                 .rev()
+                .filter(|&p| line_indices[p] == line_indices[n])
+                .find_map(|p| mapped[p].map(|k| (p, timed[k].2)));
+            let following = (n + 1..chars.len())
+                .filter(|&p| line_indices[p] == line_indices[n])
                 .find_map(|p| mapped[p].map(|k| (p, timed[k].1)));
-            let following = (n + 1..chars.len()).find_map(|p| mapped[p].map(|k| (p, timed[k].1)));
             match (previous, following) {
-                (Some((a, t0)), Some((b, t1))) => t0 + (t1 - t0) * (n - a) as f64 / (b - a) as f64,
-                (Some((_, t)), None) | (None, Some((_, t))) => t,
-                _ => 0.0,
+                (Some((a, t0)), Some((b, t1))) => {
+                    let width = ((t1 - t0) / (b - a) as f64).max(0.002);
+                    let start = t0 + width * (n - a - 1) as f64;
+                    (start, start + width)
+                }
+                (Some((a, t)), None) => {
+                    let start = t + 0.04 * (n - a - 1) as f64;
+                    (start, start + 0.04)
+                }
+                (None, Some((b, t))) => {
+                    let start = (t - 0.04 * (b - n) as f64).max(0.0);
+                    (start, start + 0.04)
+                }
+                _ => anyhow::bail!(
+                    "音声へ合わせられない歌詞の行があります。時刻付き歌詞で修正してください。"
+                ),
             }
         };
         if n > 0 {
-            centers[n] = centers[n].max(centers[n - 1]);
+            intervals[n].0 = intervals[n].0.max(intervals[n - 1].0 + 0.002);
         }
+        intervals[n].1 = intervals[n].1.max(intervals[n].0 + 0.002);
     }
     Ok(chars
         .into_iter()
         .enumerate()
         .map(|(n, c)| Word {
             text: c.to_string(),
-            start: if n == 0 {
-                (centers[n] - 0.04).max(0.0)
-            } else {
-                (centers[n - 1] + centers[n]) / 2.0
-            },
-            end: centers
-                .get(n + 1)
-                .map(|v| (centers[n] + v) / 2.0)
-                .unwrap_or(centers[n] + 0.1),
+            start: intervals[n].0,
+            end: intervals[n].1,
             confidence: if mapped[n].is_some() { 1.0 } else { 0.0 },
+            join_previous: joins[n],
+            line_index: line_indices[n],
         })
         .collect())
 }
@@ -120,6 +159,10 @@ pub struct Word {
     pub start: f64,
     pub end: f64,
     pub confidence: f64,
+    #[serde(default)]
+    pub join_previous: bool,
+    #[serde(default)]
+    pub line_index: u32,
 }
 
 pub fn prepare(
@@ -146,6 +189,7 @@ pub fn prepare(
             reference,
             Path::new("D:/CC/Tools/forced-align/models/model_quantized.onnx"),
             Path::new("D:/CC/Tools/forced-align/models/vocab.json"),
+            progress,
         )?
     } else {
         let executable = Path::new("D:/CC/Tools/whisper-cpp/v1.9.2/Release/whisper-cli.exe");
@@ -181,6 +225,11 @@ pub fn prepare(
                 "-of",
             ])
             .arg(&prefix)
+            .args(if reference.trim().is_empty() {
+                Vec::<String>::new()
+            } else {
+                vec!["--prompt".into(), reference.chars().take(700).collect()]
+            })
             .stdout(std::process::Stdio::from(log.try_clone()?))
             .stderr(std::process::Stdio::from(log))
             .spawn()?;
@@ -226,11 +275,21 @@ pub fn prepare(
                                     .reduce(f64::min)
                             })
                             .unwrap_or(0.0),
+                        join_previous: false,
+                        line_index: 0,
                     })
                 })
                 .collect()
         }
     };
+    if !reference.trim().is_empty() && reference.is_ascii() {
+        let average =
+            words.iter().map(|word| word.confidence).sum::<f64>() / words.len().max(1) as f64;
+        ensure!(
+            average >= 0.35,
+            "英語歌詞の時刻合わせの確信度が不足しています。時刻付き歌詞で修正してください。"
+        );
+    }
     words.retain(|word| word.start < duration && word.end > word.start);
     for word in &mut words {
         word.end = word.end.min(duration);
@@ -245,6 +304,15 @@ pub fn prepare(
 
 /// Viterbi over a CTC state graph with blanks and repeated-character constraints.
 pub fn ctc_path(log_probs: &[Vec<f64>], target: &[usize], blank: usize) -> Result<Vec<usize>> {
+    ctc_path_checked(log_probs, target, blank, &crate::Progress::default())
+}
+
+fn ctc_path_checked(
+    log_probs: &[Vec<f64>],
+    target: &[usize],
+    blank: usize,
+    progress: &crate::Progress,
+) -> Result<Vec<usize>> {
     ensure!(
         !log_probs.is_empty() && !target.is_empty(),
         "音声か正本の歌詞が空です。"
@@ -267,6 +335,7 @@ pub fn ctc_path(log_probs: &[Vec<f64>], target: &[usize], blank: usize) -> Resul
     prev[1] = log_probs[0][target[0]];
     let mut back = vec![0u8; states * frames];
     for (t, row) in log_probs.iter().enumerate().skip(1) {
+        progress.check()?;
         let mut next = vec![f64::NEG_INFINITY; states];
         for s in 0..states {
             ensure!(label(s) < row.len(), "歌詞の語彙が一致しません。");
@@ -310,19 +379,10 @@ pub fn force_english(
     reference: &str,
     model: &Path,
     vocab: &Path,
+    progress: &crate::Progress,
 ) -> Result<Vec<Word>> {
     use ort::{session::Session, value::Tensor};
-    let runtime = std::env::current_exe()?
-        .parent()
-        .context("実行先がありません。")?
-        .join("onnxruntime.dll");
-    let runtime = if runtime.is_file() {
-        runtime
-    } else {
-        "D:/CC/Tools/onnxruntime-directml/1.22.1/package/runtimes/win-x64/native/onnxruntime.dll"
-            .into()
-    };
-    ort::init_from(runtime.display().to_string()).commit()?;
+    crate::runtime::initialize(false)?;
     let mut session = Session::builder()?
         .with_intra_threads(4)?
         .commit_from_file(model)?;
@@ -343,6 +403,7 @@ pub fn force_english(
     let mut times = Vec::new();
     const CHUNK: usize = 16000 * 12;
     for (index, part) in audio.chunks(CHUNK).enumerate() {
+        progress.check()?;
         let mean = part.iter().map(|&x| x as f64).sum::<f64>() / part.len() as f64;
         let deviation = (part.iter().map(|&x| (x as f64 - mean).powi(2)).sum::<f64>()
             / part.len() as f64
@@ -399,7 +460,7 @@ pub fn force_english(
             word_indices.push(index);
         }
     }
-    let path = ctc_path(&probabilities, &target, dictionary["<pad>"])?;
+    let path = ctc_path_checked(&probabilities, &target, dictionary["<pad>"], progress)?;
     let mut result: Vec<Word> = words
         .into_iter()
         .map(|text| Word {
@@ -407,6 +468,8 @@ pub fn force_english(
             start: f64::INFINITY,
             end: 0.0,
             confidence: 0.0,
+            join_previous: false,
+            line_index: 0,
         })
         .collect();
     let mut counts = vec![0usize; result.len()];
@@ -440,6 +503,7 @@ pub fn force_english(
     _reference: &str,
     _model: &Path,
     _vocab: &Path,
+    _progress: &crate::Progress,
 ) -> Result<Vec<Word>> {
     anyhow::bail!("このビルドには時刻合わせが含まれていません。")
 }
@@ -447,6 +511,34 @@ pub fn force_english(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provided_lyrics_keep_words_and_strict_positive_timing() {
+        let data = serde_json::json!({"transcription":[{"tokens":[{"text":"My","offsets":{"from":100,"to":300},"t_dtw":20},{"text":" universe","offsets":{"from":300,"to":1500},"t_dtw":90}]}]});
+        let words = reference_to_whisper("My Universe", &data).unwrap();
+        assert_eq!(
+            words.iter().map(|w| w.text.as_str()).collect::<String>(),
+            "MyUniverse"
+        );
+        assert!(!words[2].join_previous);
+        assert!(words[3].join_previous);
+        assert!(words.iter().all(|w| w.end > w.start));
+        assert!(words.windows(2).all(|w| w[0].start <= w[1].start));
+        assert!(reference_to_whisper("ほげほげ", &data).is_err());
+    }
+    #[test]
+    fn line_silence_keeps_recognized_start_and_cancel_stops_viterbi() {
+        let data = serde_json::json!({"transcription":[{"tokens":[{"text":"あ","offsets":{"from":1000,"to":1200},"t_dtw":110},{"text":"い","offsets":{"from":10000,"to":10200},"t_dtw":1010}]}]});
+        let words = reference_to_whisper("あ\nい", &data).unwrap();
+        assert!((words[1].start - 10.0).abs() < 0.02);
+        assert!(words[0].end < 1.3);
+        let progress = crate::Progress::default();
+        progress
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            ctc_path_checked(&[vec![-1.0, -0.1], vec![-1.0, -0.1]], &[1], 0, &progress).is_err()
+        );
+    }
     #[test]
     fn repeated_characters_require_a_blank_between_them() {
         let p = vec![vec![-5.0, -0.1], vec![-0.1, -5.0], vec![-5.0, -0.1]];

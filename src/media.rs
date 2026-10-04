@@ -24,7 +24,7 @@ pub struct Options {
     pub preset: VideoPreset,
     #[serde(default)]
     pub style: VisualStyle,
-    #[serde(default)]
+    #[serde(default = "legacy_separation")]
     pub separation: crate::model::SeparationModel,
     #[serde(default = "legacy_sample_rate")]
     pub sample_rate: u32,
@@ -36,6 +36,9 @@ pub struct Options {
 fn legacy_sample_rate() -> u32 {
     44100
 }
+fn legacy_separation() -> crate::model::SeparationModel {
+    crate::model::SeparationModel::Standard
+}
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -46,7 +49,7 @@ impl Default for Options {
             original_video: true,
             preset: VideoPreset::default(),
             style: VisualStyle::default(),
-            separation: crate::model::SeparationModel::Standard,
+            separation: crate::model::SeparationModel::MelBandFp16,
             sample_rate: 48000,
             words: Vec::new(),
             automatic_subtitles: true,
@@ -465,8 +468,22 @@ pub fn export(
     if options.key != 0 || options.tempo != 1.0 {
         audio_args.extend(["-af".into(),format!("rubberband=tempo={}:pitch={pitch}:channels=together,alimiter=limit=0.98:level=false:latency=true",options.tempo)]);
     }
-    audio_args.extend(["-c:a".into(), "pcm_s24le".into(), "-ar".into(),options.sample_rate.to_string(),"karaoke.wav".into()]);
+    audio_args.extend([
+        "-c:a".into(),
+        "pcm_f32le".into(),
+        "-ar".into(),
+        options.sample_rate.to_string(),
+        "adjusted-audio.wav".into(),
+    ]);
     run(tools, dir, &audio_args, progress)?;
+    let peak = true_peak(tools, &dir.join("adjusted-audio.wav"))?;
+    let mut encode = vec!["-i".into(), "adjusted-audio.wav".into()];
+    if peak > -3.0 {
+        encode.extend(["-af".into(), format!("volume={:.3}dB", -3.1 - peak)]);
+    }
+    encode.extend(["-c:a".into(), "pcm_s24le".into(), "karaoke.wav".into()]);
+    run(tools, dir, &encode, progress)?;
+    fs::remove_file(dir.join("adjusted-audio.wav"))?;
     preserve_headroom(tools, dir, progress)?;
     run(
         tools,
@@ -580,15 +597,41 @@ fn render_bounded(
         source.duration <= max_duration,
         "音源が処理できる長さを超えています。"
     );
-    let (left, right) = decode_bounded(&tools, &input, &dir, progress, max_duration)?;
-    let duration = left.len() as f64 / 44100.0;
-    write_stereo(&dir.join("instrumental-raw.wav"), &left, &right)?;
+    run(
+        &tools,
+        &dir,
+        &[
+            "-protocol_whitelist".into(),
+            "file,pipe".into(),
+            "-i".into(),
+            input.display().to_string(),
+            "-map".into(),
+            "0:a:0".into(),
+            "-vn".into(),
+            "-af".into(),
+            "aresample=async=1:first_pts=0".into(),
+            "-ar".into(),
+            options.sample_rate.to_string(),
+            "-ac".into(),
+            "2".into(),
+            "-t".into(),
+            format!("{:.3}", max_duration + 0.1),
+            "-c:a".into(),
+            "pcm_f32le".into(),
+            "instrumental-raw.wav".into(),
+        ],
+        progress,
+    )?;
+    let duration = probe(&tools, &dir.join("instrumental-raw.wav"))?.duration;
+    ensure!(
+        duration <= max_duration,
+        "音源が処理できる長さを超えています。"
+    );
     export(&tools, &input, &dir, &source, options, duration, progress)?;
     fs::write(
         dir.join("settings.json"),
         serde_json::to_vec_pretty(options)?,
     )?;
-    fs::remove_file(dir.join("decoded.wav"))?;
     fs::remove_file(dir.join("instrumental-raw.wav"))?;
     progress.set("指定した音源で字幕付き映像ができました。");
     Ok(())
@@ -623,6 +666,9 @@ pub fn convert(
         .canonicalize()
         .context("入力ファイルが見つかりません。")?;
     let dir = dir.canonicalize()?;
+    if !options.lyrics.trim().is_empty() {
+        fs::write(dir.join("reference-lyrics.txt"), &options.lyrics)?;
+    }
     let tools = Tools::discover();
     tools.check()?;
     progress.set("音源を読み込んでいます。");
@@ -673,14 +719,28 @@ pub fn convert(
         && ((!effective.lyrics.trim().is_empty() && !effective.lyrics.trim().starts_with('['))
             || (effective.automatic_subtitles && effective.lyrics.trim().is_empty()))
     {
-        effective.words = crate::alignment::prepare(
+        let result = crate::alignment::prepare(
             &dir.join("vocals.wav"),
             &dir,
             &effective.lyrics,
             duration,
             progress,
-        )?;
-        effective.lyrics = lyrics::to_lrc(&lyrics::word_cues(&effective.words));
+        );
+        match result {
+            Ok(words) => {
+                effective.words = words;
+                effective.lyrics = lyrics::to_lrc(&lyrics::word_cues(&effective.words));
+            }
+            Err(error) => {
+                progress.check()?;
+                fs::write(
+                    dir.join("subtitle-warning.txt"),
+                    "歌詞の時刻を確定できませんでした。時刻付きの歌詞を入力して作り直してください。",
+                )?;
+                fs::write(dir.join("alignment-error.log"), format!("{error:#}"))?;
+                effective.lyrics.clear();
+            }
+        }
         effective.automatic_subtitles = false;
     }
     progress.set("キーと速度を調整しています。");

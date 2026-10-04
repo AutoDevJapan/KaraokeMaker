@@ -36,6 +36,7 @@ fn unchanged_key_and_speed_preserve_stereo_transients_to_pcm24_precision() {
     let probe = media::probe(&tools, &source).unwrap();
     let options = Options {
         original_video: false,
+        sample_rate: 44100,
         ..Options::default()
     };
     media::export(
@@ -57,7 +58,12 @@ fn unchanged_key_and_speed_preserve_stereo_transients_to_pcm24_precision() {
         .collect();
     assert_eq!(output.len(), 88200);
     let mut max_error = 0f32;
-    for (pair, (&l, &r)) in output.chunks_exact(2).zip(left.iter().zip(&right)) {
+    for (pair, (&l, &r)) in output
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(left.iter().zip(&right))
+    {
         max_error = max_error.max((pair[0] - l).abs()).max((pair[1] - r).abs());
     }
     assert!(

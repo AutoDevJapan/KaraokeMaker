@@ -38,31 +38,36 @@ fn gpu_device() -> Result<i32> {
 
 #[cfg(feature = "ort")]
 pub fn separate(left: &[f32], right: &[f32], model: &Path, progress: &Progress) -> Result<Stems> {
-    use ort::{execution_providers::DirectMLExecutionProvider, session::Session, value::Tensor};
+    use ort::{
+        execution_providers::{
+            CUDAExecutionProvider, DirectMLExecutionProvider, ExecutionProvider,
+        },
+        session::Session,
+        value::Tensor,
+    };
     ensure!(
         left.len() == right.len() && !left.is_empty(),
         "音源の左右の長さが不正です。"
     );
-    let adjacent = std::env::current_exe()?
-        .parent()
-        .context("実行先を確認できません。")?
-        .join("onnxruntime.dll");
-    let runtime = if adjacent.is_file() {
-        adjacent
-    } else {
-        "D:/CC/Tools/onnxruntime-directml/1.22.1/package/runtimes/win-x64/native/onnxruntime.dll"
-            .into()
-    };
-    ensure!(runtime.is_file(), "ONNX Runtimeの導入が必要です。");
-    ort::init_from(runtime.display().to_string()).commit()?;
+    let half = model
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().contains("fp16"));
+    crate::runtime::initialize(half)?;
     progress.set("Mel-Band RoFormerをGPUへ読み込んでいます。");
+    let cuda = CUDAExecutionProvider::default();
+    let provider = if cuda.is_available()? {
+        eprintln!("RoFormer実行方式: CUDA / RTX 5090");
+        cuda.build().error_on_failure()
+    } else {
+        DirectMLExecutionProvider::default()
+            .with_device_id(gpu_device()?)
+            .build()
+            .error_on_failure()
+    };
     let mut session = Session::builder()?
         .with_parallel_execution(false)?
         .with_memory_pattern(false)?
-        .with_execution_providers([DirectMLExecutionProvider::default()
-            .with_device_id(gpu_device()?)
-            .build()
-            .error_on_failure()])?
+        .with_execution_providers([provider])?
         .commit_from_file(model)
         .context("Mel-Band RoFormerを読み込めませんでした。")?;
     let split_spectra = session.inputs.iter().any(|input| input.name == "spec_real");
