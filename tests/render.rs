@@ -100,7 +100,9 @@ fn cli_renders_original_mix_and_revisions_in_full_hd_and_vertical_without_a_mode
         let start = width as usize * (height as usize * 60 / 100) * 3;
         let end = width as usize * (height as usize * 95 / 100) * 3;
         let bright = frame.stdout[start..end]
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|pixel| pixel.iter().all(|&channel| channel > 128))
             .count();
         assert!(
