@@ -860,6 +860,9 @@ async fn audio(
         return StatusCode::NOT_FOUND.into_response();
     };
     let length = metadata.len();
+    if length == 0 || length > music_import::MAX_MP3 as u64 {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let mut status = StatusCode::OK;
     let (start, end) = if let Some(range) = headers.get(header::RANGE) {
         let Some(range) = range.to_str().ok().and_then(|r| web::byte_range(r, length)) else {
