@@ -97,12 +97,21 @@ pub fn parse_lrc(text: &str) -> Result<Vec<Cue>> {
     Ok(merged)
 }
 
-fn ass_text(text: &str) -> String {
+fn subtitle_text(text: &str) -> String {
     text.replace('\\', "＼")
         .replace('{', "｛")
         .replace('}', "｝")
+        .replace('<', "＜")
+        .replace('>', "＞")
         .replace('\r', "")
-        .replace('\n', "\\N")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn ass_text(text: &str) -> String {
+    subtitle_text(text).replace('\n', "\\N")
 }
 
 fn stamp(seconds: f64) -> String {
@@ -223,7 +232,7 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
             "{number}\n{} --> {}\n{}\n\n",
             stamp_srt(cue.seconds / tempo),
             stamp_srt(end / tempo),
-            cue.text.replace('\r', "")
+            subtitle_text(&cue.text)
         ));
     }
     Ok(result)
