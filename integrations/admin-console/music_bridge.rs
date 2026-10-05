@@ -68,7 +68,8 @@ async fn proxy(client: reqwest::Client, request: Request, broker: &str) -> Respo
         }
     }
     let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, 128 * 1024).await {
+    let is_head = parts.method == axum::http::Method::HEAD;
+    let body = match to_bytes(body, 16 * 1024 * 1024 + 16 * 1024).await {
         Ok(body) => body,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };
@@ -88,6 +89,9 @@ async fn proxy(client: reqwest::Client, request: Request, broker: &str) -> Respo
     if let Some(content_type) = parts.headers.get(header::CONTENT_TYPE) {
         outbound = outbound.header(header::CONTENT_TYPE, content_type.clone());
     }
+    if let Some(range) = parts.headers.get(header::RANGE) {
+        outbound = outbound.header(header::RANGE, range.clone());
+    }
     let result = match outbound.send().await {
         Ok(result) => result,
         Err(_) => {
@@ -98,9 +102,28 @@ async fn proxy(client: reqwest::Client, request: Request, broker: &str) -> Respo
     };
     let status = result.status();
     let source_headers = result.headers().clone();
-    let bytes = match result.bytes().await {
-        Ok(bytes) if bytes.len() <= 2 * 1024 * 1024 => bytes,
-        _ => return unavailable("音楽制作の応答を読み取れませんでした。"),
+    let mut bytes = Vec::new();
+    let mut result = result;
+    loop {
+        let chunk = match result.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => return unavailable("音楽制作の応答を読み取れませんでした。"),
+        };
+        if bytes.len().saturating_add(chunk.len()) > 16 * 1024 * 1024 + 16 * 1024 {
+            return unavailable("音楽制作の応答が大きすぎます。");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let bytes = match source_headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        Some(length) if !is_head && length != bytes.len() => {
+            return unavailable("音楽制作の応答を読み取れませんでした。");
+        }
+        _ => bytes,
     };
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = status;
@@ -110,6 +133,9 @@ async fn proxy(client: reqwest::Client, request: Request, broker: &str) -> Respo
         header::CONTENT_SECURITY_POLICY,
         header::CACHE_CONTROL,
         header::X_CONTENT_TYPE_OPTIONS,
+        header::CONTENT_LENGTH,
+        header::CONTENT_RANGE,
+        header::ACCEPT_RANGES,
     ] {
         if let Some(value) = source_headers.get(&name) {
             response.headers_mut().insert(name, value.clone());
@@ -128,6 +154,113 @@ mod tests {
         Router,
         routing::{get, post},
     };
+    #[tokio::test]
+    async fn bridge_preserves_large_upload_audio_and_byte_ranges() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let backend = Router::new()
+            .route(
+                "/api/health",
+                get(|| async { axum::Json(serde_json::json!({"app":"KaraokeMaker"})) }),
+            )
+            .route(
+                "/music/project/import",
+                post(|request: Request| async move {
+                    assert!(request.headers().get(header::COOKIE).is_none());
+                    let bytes = to_bytes(request.into_body(), 1024 * 1024).await.unwrap();
+                    assert_eq!(bytes.len(), 200 * 1024);
+                    assert!(bytes.iter().all(|b| *b == 7));
+                    StatusCode::SEE_OTHER
+                }),
+            )
+            .route(
+                "/music/project/audio/clip",
+                get(|request: Request| async move {
+                    if let Some(range) = request.headers().get(header::RANGE) {
+                        assert_eq!(range, "bytes=1-3");
+                        (
+                            StatusCode::PARTIAL_CONTENT,
+                            [
+                                (header::CONTENT_TYPE, "audio/mpeg"),
+                                (header::CONTENT_RANGE, "bytes 1-3/3145728"),
+                                (header::ACCEPT_RANGES, "bytes"),
+                            ],
+                            vec![7_u8; 3],
+                        )
+                            .into_response()
+                    } else {
+                        (
+                            [
+                                (header::CONTENT_TYPE, "audio/mpeg"),
+                                (header::ACCEPT_RANGES, "bytes"),
+                            ],
+                            vec![7_u8; 3 * 1024 * 1024],
+                        )
+                            .into_response()
+                    }
+                }),
+            );
+        let worker = tokio::spawn(async move {
+            axum::serve(listener, backend).await.unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let upload = Request::builder()
+            .method("POST")
+            .uri("/music/project/import")
+            .header(
+                header::CONTENT_TYPE,
+                "multipart/form-data; boundary=fixture",
+            )
+            .header(header::COOKIE, "dummy=fixture-only")
+            .body(Body::from(vec![7_u8; 200 * 1024]))
+            .unwrap();
+        assert_eq!(
+            proxy(client.clone(), upload, &base).await.status(),
+            StatusCode::SEE_OTHER
+        );
+        let response = proxy(
+            client.clone(),
+            Request::builder()
+                .uri("/music/project/audio/clip")
+                .body(Body::empty())
+                .unwrap(),
+            &base,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(bytes.len(), 3 * 1024 * 1024);
+        assert!(bytes.iter().all(|b| *b == 7));
+        let response = proxy(
+            client,
+            Request::builder()
+                .uri("/music/project/audio/clip")
+                .header(header::RANGE, "bytes=1-3")
+                .body(Body::empty())
+                .unwrap(),
+            &base,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.headers()[header::CONTENT_RANGE],
+            "bytes 1-3/3145728"
+        );
+        assert_eq!(
+            to_bytes(response.into_body(), 4).await.unwrap().as_ref(),
+            &[7_u8; 3]
+        );
+        worker.abort();
+        let _ = worker.await;
+    }
     #[tokio::test]
     async fn bridge_preserves_form_and_redirect_without_forwarding_credentials() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))

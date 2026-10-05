@@ -174,7 +174,6 @@ impl App {
         }
     }
     pub fn cancel_workers(&self) {
-        self.music.session.close();
         for job in self.jobs.lock().unwrap_or_else(|e| e.into_inner()).values() {
             job.progress.cancelled.store(true, Ordering::Relaxed);
         }
@@ -729,7 +728,7 @@ async fn shutdown(State(app): State<App>, Form(token): Form<Token>) -> Response 
     shell("終了しました","<h1>アプリを終了しました。</h1><p>この画面を閉じてください。作った結果は次回の起動時に開けます。</p>",false).into_response()
 }
 
-fn byte_range(range: &str, length: u64) -> Option<(u64, u64)> {
+pub(crate) fn byte_range(range: &str, length: u64) -> Option<(u64, u64)> {
     let (start, end) = range.strip_prefix("bytes=")?.split_once('-')?;
     if length == 0 {
         return None;
