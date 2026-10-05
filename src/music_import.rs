@@ -33,11 +33,10 @@ pub fn storage_id(id: &str) -> Result<String> {
     if id.contains("..") || id.contains('/') || id.contains('\\') {
         anyhow::bail!("曲の識別子が不正です。");
     }
-    ensure!(
-        Uuid::parse_str(id)?.to_string() == id,
-        "曲の識別子が不正です。"
-    );
-    Ok(id.to_owned())
+    let parsed = Uuid::parse_str(id)?;
+    let canonical = parsed.to_string();
+    ensure!(canonical == id, "曲の識別子が不正です。");
+    Ok(canonical)
 }
 
 fn storage_hash(hash: &str) -> Result<String> {
