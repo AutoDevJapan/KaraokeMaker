@@ -175,15 +175,16 @@ mod tests {
         broker.dispatch(project, &task).await.unwrap();
         task.phase = Phase::Unknown;
         assert!(broker.dispatch(project, &task).await.is_err());
-        let bodies = calls.lock().unwrap();
-        assert_eq!(bodies.len(), 2);
-        assert_eq!(bodies[0], bodies[1]);
-        assert_eq!(bodies[0]["id"], 123);
-        assert_eq!(
-            bodies[0]["request_id"],
-            "suno-browser-00000000-0000-4000-8000-000000000001-00000000-0000-4000-8000-000000000002"
-        );
-        drop(bodies);
+        {
+            let bodies = calls.lock().unwrap();
+            assert_eq!(bodies.len(), 2);
+            assert_eq!(bodies[0], bodies[1]);
+            assert_eq!(bodies[0]["id"], 123);
+            assert_eq!(
+                bodies[0]["request_id"],
+                "suno-browser-00000000-0000-4000-8000-000000000001-00000000-0000-4000-8000-000000000002"
+            );
+        }
         worker.abort();
         let _ = worker.await;
     }

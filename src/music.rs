@@ -455,13 +455,13 @@ async fn generate(
             .await
     }
     .await;
-    if let Err(error) = result {
-        if let Err(save_error) = app.music.update(&id, |song| {
+    if let Err(error) = result
+        && let Err(save_error) = app.music.update(&id, |song| {
             song.error = Some(error.to_string());
             Ok(())
-        }) {
-            return fail(save_error);
-        }
+        })
+    {
+        return fail(save_error);
     }
     Redirect::to(&format!("/music/{id}")).into_response()
 }
