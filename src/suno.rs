@@ -52,6 +52,12 @@ pub struct Broker {
     base: String,
 }
 impl Broker {
+    #[cfg(test)]
+    pub(crate) fn for_test(base: String) -> Self {
+        let mut broker = Self::new().unwrap();
+        broker.base = base;
+        broker
+    }
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
@@ -88,7 +94,12 @@ impl Broker {
     pub async fn add_task(&self, project: &str, task: &str) -> Result<u64> {
         crate::music_import::canonical_id(project)?;
         crate::music_import::canonical_id(task)?;
-        let data = self.post("todo/add", json!({"project":"KaraokeMaker", "title":"保存した歌詞から通常ChromeのSunoで曲候補を1回生成する", "note":format!("音楽制作画面で明示された要求です。担当取得後に1回だけ送信します。結果が不明なら履歴の確認だけを行います。下書き {project}、要求 {task}。操作画面 http://127.0.0.1:10012/music/{project}/worker/{task}")})).await?;
+        let request_id = format!("suno-browser-{project}-{task}");
+        let data = self.post("todo/ensure", json!({"request_id":request_id,"project":"KaraokeMaker", "title":"保存した歌詞から通常ChromeのSunoで曲候補を1回生成する", "note":format!("音楽制作画面で明示された要求です。担当取得後に1回だけ送信します。結果が不明なら履歴の確認だけを行います。下書き {project}、要求 {task}。操作画面 http://127.0.0.1:10012/music/{project}/worker/{task}")})).await?;
+        ensure!(
+            data["request_id"] == request_id,
+            "担当の受付番号を確認できませんでした。"
+        );
         data["item"]["id"]
             .as_u64()
             .filter(|id| *id > 0)
@@ -135,8 +146,8 @@ mod tests {
         let base = format!("http://{}/api/agent", listener.local_addr().unwrap());
         let router = Router::new()
             .route(
-                "/api/agent/todo/add",
-                post(|| async { Json(json!({"ok":true,"data":{"item":{"id":123}}})) }),
+                "/api/agent/todo/ensure",
+                post(|Json(body): Json<Value>| async move { Json(json!({"ok":true,"data":{"request_id":body["request_id"],"item":{"id":123}}})) }),
             )
             .route(
                 "/api/agent/delegate",

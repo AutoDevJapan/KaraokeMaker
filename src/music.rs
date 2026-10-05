@@ -372,6 +372,10 @@ async fn detail(State(app): State<App>, WebPath(id): WebPath<String>) -> Respons
             }),
             web::escape(&clip.status)
         ));
+        body.push_str(&format!(
+            "<p class=\"hint\">Sunoの曲ID：<code>{}</code></p>",
+            web::escape(&clip.id)
+        ));
         if song.audio.contains_key(&clip.id) {
             body.push_str(&format!(
                 "<audio controls preload=\"none\" src=\"/music/{id}/audio/{}\"></audio>",
@@ -402,9 +406,7 @@ async fn detail(State(app): State<App>, WebPath(id): WebPath<String>) -> Respons
         ));
         if task.phase == Phase::Queued {
             body.push_str(&format!(r#"<form method="post" action="/music/{id}/worker/{}/cancel"><input type="hidden" name="csrf" value="{}"><button class="secondary" type="submit">未送信の要求を取り消す</button></form>"#, task.id, app.csrf));
-            if task.todo_id.is_some() {
-                body.push_str(&format!(r#"<form method="post" action="/music/{id}/dispatch"><input type="hidden" name="csrf" value="{}"><button class="secondary" type="submit">同じ担当要求の受付を確認する</button><p class="hint">同じ要求番号で担当の受付を確認します。新しい曲の生成要求は作りません。</p></form>"#, app.csrf));
-            }
+            body.push_str(&format!(r#"<form method="post" action="/music/{id}/dispatch"><input type="hidden" name="csrf" value="{}"><button class="secondary" type="submit">同じ担当要求の受付を確認する</button><p class="hint">同じ要求番号で担当の受付を確認します。新しい曲の生成要求は作りません。</p></form>"#, app.csrf));
         }
     }
     if !song.clips.is_empty() {
@@ -437,27 +439,7 @@ async fn generate(
         song.error = None;
         Ok(())
     }) { return fail(error); }
-    let result = async {
-        let todo = app.music.broker.add_task(&id, &task.id).await?;
-        app.music.update(&id, |song| {
-            let current = song
-                .browser_task
-                .as_mut()
-                .context("生成要求がありません。")?;
-            ensure!(
-                current.id == task.id && current.phase == Phase::Queued,
-                "生成要求を取り消しています。"
-            );
-            current.todo_id = Some(todo);
-            Ok(())
-        })?;
-        let saved = app.music.load(&id)?;
-        app.music
-            .broker
-            .dispatch(&id, saved.browser_task.as_ref().unwrap())
-            .await
-    }
-    .await;
+    let result = dispatch_saved(&app.music, &id).await;
     if let Err(error) = result
         && let Err(save_error) = app.music.update(&id, |song| {
             song.error = Some(error.to_string());
@@ -468,6 +450,42 @@ async fn generate(
     }
     Redirect::to(&format!("/music/{id}")).into_response()
 }
+
+async fn dispatch_saved(workspace: &Workspace, id: &str) -> Result<()> {
+    let song = workspace.load(id)?;
+    let task = song
+        .browser_task
+        .as_ref()
+        .context("保存した要求がありません。")?;
+    ensure!(
+        task.phase == Phase::Queued,
+        "この要求をもう一度送信できません。"
+    );
+    if task.todo_id.is_none() {
+        let todo = workspace.broker.add_task(id, &task.id).await?;
+        workspace.update(id, |song| {
+            let current = song
+                .browser_task
+                .as_mut()
+                .context("生成要求がありません。")?;
+            ensure!(
+                current.id == task.id && current.phase == Phase::Queued,
+                "生成要求を取り消しています。"
+            );
+            ensure!(
+                current.todo_id.is_none_or(|saved| saved == todo),
+                "受付した担当番号が一致しません。"
+            );
+            current.todo_id = Some(todo);
+            Ok(())
+        })?;
+    }
+    let saved = workspace.load(id)?;
+    workspace
+        .broker
+        .dispatch(id, saved.browser_task.as_ref().unwrap())
+        .await
+}
 async fn dispatch_again(
     State(app): State<App>,
     WebPath(id): WebPath<String>,
@@ -476,19 +494,7 @@ async fn dispatch_again(
     if token.csrf != app.csrf {
         return fail("音楽制作の画面を開き直してください。");
     }
-    let result = async {
-        let song = app.music.load(&id)?;
-        app.music
-            .broker
-            .dispatch(
-                &id,
-                song.browser_task
-                    .as_ref()
-                    .context("保存した要求がありません。")?,
-            )
-            .await
-    }
-    .await;
+    let result = dispatch_saved(&app.music, &id).await;
     match result {
         Ok(()) => Redirect::to(&format!("/music/{id}")).into_response(),
         Err(error) => fail(error),
@@ -978,6 +984,127 @@ mod tests {
                 .phase,
             Phase::Cancelled
         );
+    }
+
+    #[tokio::test]
+    async fn queued_request_recovers_lost_receipt_after_restart_without_new_request() {
+        use axum::Json;
+        use serde_json::{Value, json};
+        use std::sync::{Arc, Mutex};
+        let state = Arc::new(Mutex::new((
+            0_usize,
+            0_usize,
+            BTreeMap::<String, u64>::new(),
+        )));
+        let seen = state.clone();
+        let delegated = state.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/api/agent", listener.local_addr().unwrap());
+        let stub = Router::new()
+            .route(
+                "/api/agent/todo/ensure",
+                post(move |Json(body): Json<Value>| {
+                    let seen = seen.clone();
+                    async move {
+                        let key = body["request_id"].as_str().unwrap().to_owned();
+                        let mut state = seen.lock().unwrap();
+                        state.0 += 1;
+                        let todo = *state.2.entry(key.clone()).or_insert(123);
+                        if state.0 == 1 {
+                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        }
+                        Json(json!({"ok":true,"data":{"request_id":key,"item":{"id":todo}}}))
+                            .into_response()
+                    }
+                }),
+            )
+            .route(
+                "/api/agent/delegate",
+                post(move || {
+                    let delegated = delegated.clone();
+                    async move {
+                        delegated.lock().unwrap().1 += 1;
+                        Json(json!({"ok":true,"data":{"accepted":true}}))
+                    }
+                }),
+            );
+        let worker = tokio::spawn(async move {
+            axum::serve(listener, stub).await.unwrap();
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = App::new(temp.path(), 19531).unwrap();
+        Arc::get_mut(&mut app.music).unwrap().broker = Broker::for_test(base.clone());
+        let song = fixture();
+        app.music.save(&song).unwrap();
+        let response = web::router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/music/{}/generate", song.id))
+                    .header(header::HOST, "127.0.0.1:19531")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("csrf={}", app.csrf)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let interrupted = app.music.load(&song.id).unwrap().browser_task.unwrap();
+        assert_eq!(interrupted.phase, Phase::Queued);
+        assert_eq!(interrupted.todo_id, None);
+        drop(app);
+        let mut restarted = App::new(temp.path(), 19531).unwrap();
+        Arc::get_mut(&mut restarted.music).unwrap().broker = Broker::for_test(base);
+        let router = web::router(restarted.clone());
+        let page = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/music/{}", song.id))
+                    .header(header::HOST, "127.0.0.1:19531")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let page = page.into_body().collect().await.unwrap().to_bytes();
+        assert!(
+            std::str::from_utf8(&page)
+                .unwrap()
+                .contains("同じ担当要求の受付を確認する")
+        );
+        let recovered = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/music/{}/dispatch", song.id))
+                    .header(header::HOST, "127.0.0.1:19531")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("csrf={}", restarted.csrf)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recovered.status(), StatusCode::SEE_OTHER);
+        let task = restarted
+            .music
+            .load(&song.id)
+            .unwrap()
+            .browser_task
+            .unwrap();
+        assert_eq!(task.id, interrupted.id);
+        assert_eq!(task.todo_id, Some(123));
+        transition(&restarted.music, &song.id, &task.id, Phase::Claimed).unwrap();
+        assert!(transition(&restarted.music, &song.id, &task.id, Phase::Claimed).is_err());
+        assert!(dispatch_saved(&restarted.music, &song.id).await.is_err());
+        {
+            let counts = state.lock().unwrap();
+            assert_eq!(counts.0, 2);
+            assert_eq!(counts.1, 1);
+            assert_eq!(counts.2.len(), 1);
+        }
+        worker.abort();
+        let _ = worker.await;
     }
 
     #[test]
