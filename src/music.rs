@@ -484,7 +484,17 @@ async fn dispatch_saved(workspace: &Workspace, id: &str) -> Result<()> {
     workspace
         .broker
         .dispatch(id, saved.browser_task.as_ref().unwrap())
-        .await
+        .await?;
+    workspace.update(id, |song| {
+        if song
+            .browser_task
+            .as_ref()
+            .is_some_and(|current| current.id == task.id && current.phase == Phase::Queued)
+        {
+            song.error = None;
+        }
+        Ok(())
+    })
 }
 async fn dispatch_again(
     State(app): State<App>,
@@ -1052,6 +1062,7 @@ mod tests {
         let interrupted = app.music.load(&song.id).unwrap().browser_task.unwrap();
         assert_eq!(interrupted.phase, Phase::Queued);
         assert_eq!(interrupted.todo_id, None);
+        assert!(app.music.load(&song.id).unwrap().error.is_some());
         drop(app);
         let mut restarted = App::new(temp.path(), 19531).unwrap();
         Arc::get_mut(&mut restarted.music).unwrap().broker = Broker::for_test(base);
@@ -1094,6 +1105,7 @@ mod tests {
             .unwrap();
         assert_eq!(task.id, interrupted.id);
         assert_eq!(task.todo_id, Some(123));
+        assert!(restarted.music.load(&song.id).unwrap().error.is_none());
         transition(&restarted.music, &song.id, &task.id, Phase::Claimed).unwrap();
         assert!(transition(&restarted.music, &song.id, &task.id, Phase::Claimed).is_err());
         assert!(dispatch_saved(&restarted.music, &song.id).await.is_err());
