@@ -106,8 +106,7 @@ impl Workspace {
         Ok(workspace)
     }
     fn path(&self, id: &str) -> Result<PathBuf> {
-        let uuid = Uuid::parse_str(id)?;
-        ensure!(uuid.to_string() == id, "曲が見つかりません。");
+        let id = music_import::storage_id(id)?;
         Ok(self.root.join("projects").join(format!("{id}.json")))
     }
     fn load(&self, id: &str) -> Result<Song> {

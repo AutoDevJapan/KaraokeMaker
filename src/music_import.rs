@@ -23,19 +23,43 @@ pub struct ImportedAudio {
 }
 
 pub fn canonical_id(id: &str) -> Result<()> {
+    storage_id(id)?;
+    Ok(())
+}
+
+// Return the checked component so callers cannot accidentally use the raw input
+// when constructing storage paths. Keep existing canonical UUID filenames.
+pub fn storage_id(id: &str) -> Result<String> {
+    if id.contains("..") || id.contains('/') || id.contains('\\') {
+        anyhow::bail!("曲の識別子が不正です。");
+    }
     ensure!(
         Uuid::parse_str(id)?.to_string() == id,
         "曲の識別子が不正です。"
     );
-    Ok(())
+    Ok(id.to_owned())
+}
+
+fn storage_hash(hash: &str) -> Result<String> {
+    if hash.contains("..") || hash.contains('/') || hash.contains('\\') {
+        anyhow::bail!("保存した音源の情報を確認できませんでした。");
+    }
+    ensure!(
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "保存した音源の情報を確認できませんでした。"
+    );
+    Ok(hash.to_owned())
 }
 
 fn directory(root: &Path, project: &str, clip: &str, create: bool) -> Result<PathBuf> {
-    canonical_id(project)?;
-    canonical_id(clip)?;
+    let project = storage_id(project)?;
+    let clip = storage_id(clip)?;
     let root = root.canonicalize()?;
     let mut current = root.clone();
-    for name in ["audio", project, clip] {
+    for name in ["audio", project.as_str(), clip.as_str()] {
         current.push(name);
         if create && !current.exists() {
             fs::create_dir(&current)?;
@@ -167,14 +191,7 @@ pub fn verified_path(
     clip: &str,
     audio: &ImportedAudio,
 ) -> Result<PathBuf> {
-    ensure!(
-        audio.sha256.len() == 64
-            && audio
-                .sha256
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-        "保存した音源の情報を確認できませんでした。"
-    );
+    let hash = storage_hash(&audio.sha256)?;
     ensure!(
         audio.bytes > 0
             && audio.bytes <= MAX_MP3 as u64
@@ -183,7 +200,7 @@ pub fn verified_path(
             && audio.duration_seconds <= crate::media::MAX_DURATION,
         "保存した音源の情報を確認できませんでした。"
     );
-    let path = directory(root, project, clip, false)?.join(format!("{}.mp3", audio.sha256));
+    let path = directory(root, project, clip, false)?.join(format!("{hash}.mp3"));
     let metadata = fs::symlink_metadata(&path)?;
     ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink() && path.canonicalize()? == path,
@@ -216,6 +233,15 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         assert!(import_mp3(temp.path(), "../outside", CLIP, b"test").is_err());
         assert!(import_mp3(temp.path(), PROJECT, "../outside", b"test").is_err());
+        for invalid in [
+            "/outside",
+            "C:\\outside",
+            "\\\\server\\share",
+            "..\\outside",
+        ] {
+            assert!(import_mp3(temp.path(), invalid, CLIP, b"test").is_err());
+            assert!(import_mp3(temp.path(), PROJECT, invalid, b"test").is_err());
+        }
         assert!(import_mp3(temp.path(), PROJECT, CLIP, &[]).is_err());
         assert!(import_mp3(temp.path(), PROJECT, CLIP, &vec![0; MAX_MP3 + 1]).is_err());
         assert!(import_mp3(temp.path(), PROJECT, CLIP, b"fake mp3").is_err());
