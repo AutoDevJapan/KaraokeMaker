@@ -60,6 +60,9 @@ fn directory(root: &Path, project: &str, clip: &str, create: bool) -> Result<Pat
     let root = root.canonicalize()?;
     let mut current = root.clone();
     for name in ["audio", project.as_str(), clip.as_str()] {
+        if name.contains("..") {
+            return Err(anyhow::anyhow!("保存先を確認できませんでした。"));
+        }
         current.push(name);
         if create && !current.exists() {
             fs::create_dir(&current)?;
@@ -200,10 +203,14 @@ pub fn verified_path(
             && audio.duration_seconds <= crate::media::MAX_DURATION,
         "保存した音源の情報を確認できませんでした。"
     );
-    let path = directory(root, project, clip, false)?.join(format!("{hash}.mp3"));
+    let requested = directory(root, project, clip, false)?.join(format!("{hash}.mp3"));
+    let path = requested.canonicalize()?;
+    if !path.starts_with(root.canonicalize()?.join("audio")) {
+        return Err(anyhow::anyhow!("保存した音源を確認できませんでした。"));
+    }
     let metadata = fs::symlink_metadata(&path)?;
     ensure!(
-        metadata.is_file() && !metadata.file_type().is_symlink() && path.canonicalize()? == path,
+        metadata.is_file() && !metadata.file_type().is_symlink() && path == requested,
         "保存した音源を確認できませんでした。"
     );
     ensure!(

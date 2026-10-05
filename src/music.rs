@@ -110,9 +110,13 @@ impl Workspace {
         Ok(self.root.join("projects").join(format!("{id}.json")))
     }
     fn load(&self, id: &str) -> Result<Song> {
-        let path = self.path(id)?;
+        let requested = self.path(id)?;
+        let path = requested.canonicalize()?;
+        if !path.starts_with(self.root.join("projects")) {
+            anyhow::bail!("曲の保存先を確認できませんでした。");
+        }
         ensure!(
-            !fs::symlink_metadata(&path)?.file_type().is_symlink() && path.canonicalize()? == path,
+            !fs::symlink_metadata(&path)?.file_type().is_symlink() && path == requested,
             "曲の保存先を確認できませんでした。"
         );
         let song: Song = serde_json::from_slice(&fs::read(path)?)?;
@@ -849,9 +853,15 @@ async fn audio(
             song.audio.get(&clip).context("音源がありません。")?,
         )
     })();
-    let Ok(path) = result else {
+    let Ok(requested) = result else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let Ok(path) = requested.canonicalize() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !path.starts_with(app.music.root.join("audio")) || path != requested {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let Ok(mut file) = tokio::fs::File::open(path).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
