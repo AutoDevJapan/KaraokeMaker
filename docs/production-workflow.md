@@ -91,6 +91,8 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 
 検品対象は音声1本、動画の映像は1本（カバー画像を除く）。複数の音声が入ったファイルは、最初の音声と別の音声が再生される場合があり、最初の音量を測るだけでは保証できないため不合格にする。1曲の歌入り版と伴奏版は別の動画で納品する。
 
+動画の音声も48kHz・ステレオを検査する。QuickTime MOVをMP4という名前に変えただけのファイルは不合格。動画と音声それぞれの長さが取得できない場合も「不明」の不合格として残し、検査項目を省いて合格にしない。AACのビットレートや字幕・追加データの内容は別途検品する。
+
 ```powershell
 karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-lyric.mp4 --wav ./delivery/song-karaoke.wav --mp3 ./delivery/song-karaoke.mp3 --preset 1080p --output ./delivery/inspection-lyric.json
 karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-karaoke.mp4 --preset 1080p --output ./delivery/inspection-karaoke.json

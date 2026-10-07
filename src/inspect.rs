@@ -185,6 +185,28 @@ fn check(
     });
 }
 
+fn check_audio_format(checks: &mut Vec<Check>, audio: Option<&Value>) {
+    let rate = audio.and_then(|a| number(&a["sample_rate"]));
+    check(
+        checks,
+        "sample_rate_48000",
+        rate == Some(48000.0),
+        "48000Hz",
+        rate.map(|r| format!("{r}Hz"))
+            .unwrap_or_else(|| "なし".into()),
+    );
+    let channels = audio.and_then(|a| a["channels"].as_u64());
+    check(
+        checks,
+        "channels_stereo",
+        channels == Some(2),
+        "2ch",
+        channels
+            .map(|c| format!("{c}ch"))
+            .unwrap_or_else(|| "なし".into()),
+    );
+}
+
 fn ffprobe(tools: &Tools, path: &Path) -> Result<Value> {
     let output = hidden_command(&tools.ffprobe)
         .args(["-v", "error", "-protocol_whitelist", "file,pipe"])
@@ -260,7 +282,8 @@ fn inspect_file(
             let streams = data["streams"].as_array().cloned().unwrap_or_default();
             let of = |t: &str| {
                 streams.iter().find(|s| {
-                    s["codec_type"] == t && s["disposition"]["attached_pic"].as_i64() != Some(1)
+                    s["codec_type"] == t
+                        && (t != "video" || s["disposition"]["attached_pic"].as_i64() != Some(1))
                 })
             };
             let (video, audio) = (of("video"), of("audio"));
@@ -271,7 +294,8 @@ fn inspect_file(
                     .iter()
                     .filter(|s| {
                         s["codec_type"] == kind
-                            && s["disposition"]["attached_pic"].as_i64() != Some(1)
+                            && (kind != "video"
+                                || s["disposition"]["attached_pic"].as_i64() != Some(1))
                     })
                     .count()
             };
@@ -302,9 +326,15 @@ fn inspect_file(
                     check(
                         &mut checks,
                         "container_mp4",
-                        format_name.split(',').any(|f| f == "mp4"),
+                        format_name.split(',').any(|f| f == "mp4")
+                            && data["format"]["tags"]["major_brand"]
+                                .as_str()
+                                .is_some_and(|b| !b.trim().is_empty() && b.trim() != "qt"),
                         "mp4",
-                        format_name,
+                        format!(
+                            "{format_name}, brand={}",
+                            data["format"]["tags"]["major_brand"]
+                        ),
                     );
                     check(
                         &mut checks,
@@ -358,21 +388,22 @@ fn inspect_file(
                         "aac",
                         text(audio, "codec_name"),
                     );
+                    check_audio_format(&mut checks, audio);
                     for (id, stream) in [
                         ("video_stream_duration_matches_source", video),
                         ("audio_stream_duration_matches_source", audio),
                     ] {
-                        if let Some(d) = stream.and_then(|s| number(&s["duration"])) {
-                            check(
-                                &mut checks,
-                                id,
-                                (d - source_duration).abs() < DURATION_TOLERANCE,
-                                format!(
-                                    "元音源{source_duration:.3}秒との差{DURATION_TOLERANCE}秒未満"
-                                ),
-                                format!("{d:.3}秒"),
-                            );
-                        }
+                        let duration = stream.and_then(|s| number(&s["duration"]));
+                        check(
+                            &mut checks,
+                            id,
+                            duration
+                                .is_some_and(|d| (d - source_duration).abs() < DURATION_TOLERANCE),
+                            format!("元音源{source_duration:.3}秒との差{DURATION_TOLERANCE}秒未満"),
+                            duration
+                                .map(|d| format!("{d:.3}秒"))
+                                .unwrap_or_else(|| "不明".into()),
+                        );
                     }
                 }
                 Kind::Wav => {
@@ -390,25 +421,7 @@ fn inspect_file(
                         "pcm_s24le（24bit PCM）",
                         text(audio, "codec_name"),
                     );
-                    let rate = audio.and_then(|a| number(&a["sample_rate"]));
-                    check(
-                        &mut checks,
-                        "sample_rate_48000",
-                        rate == Some(48000.0),
-                        "48000Hz",
-                        rate.map(|r| format!("{r}Hz"))
-                            .unwrap_or_else(|| "なし".into()),
-                    );
-                    let channels = audio.and_then(|a| a["channels"].as_u64());
-                    check(
-                        &mut checks,
-                        "channels_stereo",
-                        channels == Some(2),
-                        "2ch",
-                        channels
-                            .map(|c| format!("{c}ch"))
-                            .unwrap_or_else(|| "なし".into()),
-                    );
+                    check_audio_format(&mut checks, audio);
                 }
                 Kind::Mp3 => {
                     check(
@@ -569,7 +582,7 @@ pub fn inspect(
             duration_tolerance_seconds: DURATION_TOLERANCE,
             true_peak_limit_dbtp: PEAK_LIMIT_DBTP,
             video: format!(
-                "mp4 / H.264 yuv420p / {}x{} / 30fps / AAC",
+                "mp4 / H.264 yuv420p / {}x{} / 30fps / AAC 48kHz stereo / 映像・音声各1本",
                 preset.dimensions().0,
                 preset.dimensions().1
             ),

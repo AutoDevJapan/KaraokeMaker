@@ -602,3 +602,36 @@ fn alternate_default_audio_cannot_hide_an_overload_behind_a_quiet_first_track() 
     let json: serde_json::Value = serde_json::from_slice(&fs::read(output_path).unwrap()).unwrap();
     assert_eq!(json["automatic_result"], "fail");
 }
+
+#[test]
+fn a_quicktime_file_renamed_mp4_and_low_rate_mono_aac_fail_the_delivery_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let source = source(dir);
+    let mov = video(dir, "quicktime.mov", "1280x720", "30", "yuv420p", "3");
+    let disguised = path(dir, "disguised.mp4");
+    fs::rename(mov, &disguised).unwrap();
+    let report = run(&source, Kind::Video, &disguised, VideoPreset::Hd);
+    assert_eq!(failed(&report.files[0]), ["container_mp4"]);
+
+    let good = good_video(dir);
+    let low_rate = path(dir, "low-rate-mono.mp4");
+    ffmpeg(&[
+        "-i",
+        good.to_str().unwrap(),
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-ar",
+        "24000",
+        "-ac",
+        "1",
+        low_rate.to_str().unwrap(),
+    ]);
+    let report = run(&source, Kind::Video, &low_rate, VideoPreset::Hd);
+    assert_eq!(
+        failed(&report.files[0]),
+        ["sample_rate_48000", "channels_stereo"]
+    );
+}
