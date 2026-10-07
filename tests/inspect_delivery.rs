@@ -511,3 +511,94 @@ fn padded_tail_and_missing_audio_are_failures_with_json_and_nonzero_exit() {
         assert!(bad.iter().any(|id| id == expect), "{bad:?}");
     }
 }
+
+#[test]
+fn alternate_default_audio_cannot_hide_an_overload_behind_a_quiet_first_track() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let source = source(dir);
+    let movie = path(dir, "alternate-default.mp4");
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=1280x720:r=30:d=3",
+        "-i",
+        source.to_str().unwrap(),
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=f=1000:r=48000:d=3",
+        "-filter_complex",
+        "[2:a]volume=12[hot]",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-map",
+        "[hot]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-disposition:a:0",
+        "0",
+        "-disposition:a:1",
+        "default",
+        "-t",
+        "3",
+        movie.to_str().unwrap(),
+    ]);
+    // The alternate default track overloads even though the first track is quiet.
+    let peak = Command::new(Tools::discover().ffmpeg)
+        .args(["-hide_banner", "-nostdin", "-i"])
+        .arg(&movie)
+        .args([
+            "-map",
+            "0:a:1",
+            "-af",
+            "ebur128=peak=true",
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(peak.status.success());
+    let stderr = String::from_utf8_lossy(&peak.stderr);
+    let hot_peak: f64 = stderr
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix("Peak:"))
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(hot_peak > 0.0, "{stderr}");
+    let report = run(&source, Kind::Video, &movie, VideoPreset::Hd);
+    assert!(report.files[0].true_peak_dbtp.unwrap() < -1.0);
+    assert!(!report.passed());
+    assert_eq!(failed(&report.files[0]), vec!["single_audio_stream"]);
+
+    let output_path = path(dir, "alternate-default.json");
+    let result = Command::new(env!("CARGO_BIN_EXE_karaoke-maker-cli"))
+        .args(["inspect-delivery", "--source"])
+        .arg(&source)
+        .arg("--video")
+        .arg(&movie)
+        .args(["--preset", "hd", "--output"])
+        .arg(&output_path)
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(output_path).unwrap()).unwrap();
+    assert_eq!(json["automatic_result"], "fail");
+}

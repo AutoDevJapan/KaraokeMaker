@@ -264,6 +264,25 @@ fn inspect_file(
                 })
             };
             let (video, audio) = (of("video"), of("audio"));
+            // The delivered song has one soundtrack. Measuring only the first
+            // stream cannot certify an alternate/default track in a multi-track file.
+            let count = |kind: &str| {
+                streams
+                    .iter()
+                    .filter(|s| {
+                        s["codec_type"] == kind
+                            && s["disposition"]["attached_pic"].as_i64() != Some(1)
+                    })
+                    .count()
+            };
+            let audio_count = count("audio");
+            check(
+                &mut checks,
+                "single_audio_stream",
+                audio_count == 1,
+                "音声ストリーム1本（複数音声は対象外）",
+                format!("{audio_count}本"),
+            );
             let format_name = data["format"]["format_name"].as_str().unwrap_or("");
             duration = number(&data["format"]["duration"]);
             let text = |s: Option<&Value>, key: &str| {
@@ -272,6 +291,14 @@ fn inspect_file(
             match item.kind {
                 Kind::Video => {
                     let (w, h) = preset.dimensions();
+                    let video_count = count("video");
+                    check(
+                        &mut checks,
+                        "single_video_stream",
+                        video_count == 1,
+                        "映像ストリーム1本（カバー画像は除く）",
+                        format!("{video_count}本"),
+                    );
                     check(
                         &mut checks,
                         "container_mp4",

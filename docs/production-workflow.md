@@ -89,6 +89,8 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 
 `inspect-delivery` は既存のFFmpeg/ffprobeで形式・長さ・全編の復号・true peakを測り、JSONに各項目の合否とファイルのSHA-256を残す。原本と納品物は変更しない。既存の結果JSONも上書きしない。追加のモデル・課金・Rust依存は不要。
 
+検品対象は音声1本、動画の映像は1本（カバー画像を除く）。複数の音声が入ったファイルは、最初の音声と別の音声が再生される場合があり、最初の音量を測るだけでは保証できないため不合格にする。1曲の歌入り版と伴奏版は別の動画で納品する。
+
 ```powershell
 karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-lyric.mp4 --wav ./delivery/song-karaoke.wav --mp3 ./delivery/song-karaoke.mp3 --preset 1080p --output ./delivery/inspection-lyric.json
 karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-karaoke.mp4 --preset 1080p --output ./delivery/inspection-karaoke.json
