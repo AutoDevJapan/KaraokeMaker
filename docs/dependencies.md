@@ -1,5 +1,7 @@
 # 使用する版とライセンス
 
+2026-10-07の検品CLIは追加のRust依存・モデルを使わない。JIZURAは公式ブラウザ版0.10.1、確認時commit `fc16bfe43ea4a6c25a21f1caf04d17326de14f00` を比較した。ツール本体はMIT、公式は出力物の商用利用を認めるが曲と歌詞の権利は別。[公式の利用条件](https://github.com/852wa/JIZURA#利用について出力物の権利とライセンス)。ツールを製品へ同梱せず、導入済みのChromeで操作する。外部のGoogle Fonts読み込みとプロジェクト保存に注意し、詳細を [jizura-comparison.md](jizura-comparison.md) に記録した。
+
 確認日: 2026-10-04。音質・字幕同期の改善でort、realfft、windowsを追加した。Rustの依存はCargo.lockに固定し、ビルド・テストは --locked で行う。下表はcargo metadataから取得した直接依存（開発用を含む）の宣言で、ライセンス全文の代わりではない。
 
 | 依存 | 固定した版 | crateのライセンス宣言 |
