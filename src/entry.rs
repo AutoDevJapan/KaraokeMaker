@@ -100,6 +100,25 @@ enum Mode {
     MeasureAudio {
         input: PathBuf,
     },
+    /// 納品物（動画・WAV・MP3）の形式・長さ・全編復号・true peakを検査し、結果をJSONで残します。
+    /// 検査対象は変更しません。不合格があれば終了コード1です。
+    InspectDelivery {
+        /// 元の音源（長さの基準）
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        video: Option<PathBuf>,
+        #[arg(long)]
+        wav: Option<PathBuf>,
+        #[arg(long)]
+        mp3: Option<PathBuf>,
+        /// 動画の寸法の基準
+        #[arg(long, value_enum, default_value_t = VideoPreset::FullHd)]
+        preset: VideoPreset,
+        /// 結果JSONの保存先（既存のファイルは上書きしません）
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     CheckRuntime {
         #[arg(long)]
         gpu_first: bool,
@@ -183,6 +202,44 @@ fn run() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&crate::quality::measure(&input)?)?
+            );
+        }
+        Mode::InspectDelivery {
+            source,
+            video,
+            wav,
+            mp3,
+            preset,
+            output,
+        } => {
+            use crate::inspect::{Deliverable, Kind};
+            if let Some(path) = &output {
+                anyhow::ensure!(
+                    !path.exists(),
+                    "結果の保存先がすでにあります。別のファイル名にしてください。"
+                );
+            }
+            let items: Vec<Deliverable> =
+                [(Kind::Video, video), (Kind::Wav, wav), (Kind::Mp3, mp3)]
+                    .into_iter()
+                    .filter_map(|(kind, path)| path.map(|path| Deliverable { kind, path }))
+                    .collect();
+            let tools = Tools::discover();
+            tools.check()?;
+            let report = crate::inspect::inspect(&tools, &source, &items, preset)?;
+            let json = serde_json::to_vec_pretty(&report)?;
+            if let Some(path) = output {
+                use std::io::Write;
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(path)?
+                    .write_all(&json)?;
+            }
+            println!("{}", String::from_utf8(json)?);
+            anyhow::ensure!(
+                report.passed(),
+                "納品物の自動検査に不合格の項目があります。結果のJSONを確認してください。"
             );
         }
         Mode::ReadSubtitleFrames { folder, output } => {
@@ -403,6 +460,7 @@ fn show_error(message: &str) {
             || arg == "render"
             || arg == "fetch-model"
             || arg == "check"
+            || arg == "inspect-delivery"
     }) {
         return;
     }

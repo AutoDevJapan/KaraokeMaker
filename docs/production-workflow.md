@@ -11,7 +11,7 @@
 3. `lyric-subtitle-mv-workflow` に従い、顧客の歌詞を正本として一行ずつLRCに時刻を付ける。必要なASRは `whisper-cpp-japanese-asr` のRust/ネイティブ処理を候補時刻の取得だけに用いる。Python・外部AI・APIキーは使わない。
 4. 空の時刻行を歌い終わりに置き、間奏で歌詞を消す。横は1〜2行、縦は短く改行し、顔・ロゴ・配信画面の表示と重ねない。字幕の色変化は行単位で、音節同期ではない。
 5. 顧客ごとの配色、フォント、タイトル、字幕の改行と位置を決めて保存する。素材は自作または許可済みの画像・動画に限る。AI生成イラストは持ち込まれても使用しない。静止画を使う場合は `ffmpeg-safe-editing` の手順で許可済み音源付き背景動画にしてから、原映像として渡す。現在のアプリには別画像を配置する専用UIはない。
-6. 承認済み伴奏と原曲をそれぞれ `render` へ渡す。字幕修正は編集LRCから再出力し、モデルでの分離を繰り返さない。
+6. カラオケ版は承認済み伴奏を `render` へ渡す。歌入り版はJIZURAで文字演出を作るか、合意した静かな字幕を `render` で作る。JIZURAの具体的な手順と互換性の注意点は [jizura-comparison.md](jizura-comparison.md) を参照する。字幕修正は編集LRCから再出力し、モデルでの分離を繰り返さない。
 7. 出力を全編検品し、通常メッセージで初稿を送る。修正1回を反映し、再検品して正式納品する。納品時にファイル名・形式・使い方・保存期限をトークルーム本文に書く。
 
 ## CLIでの制作例
@@ -83,6 +83,23 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 | 背景画像・ロゴ・配置を保存するテンプレート | 色・フォント・改行を案件別に指定。許可済み背景はFFmpegで準備 | [動画テンプレート](https://github.com/AutoDevJapan/KaraokeMaker/issues/4) |
 | 48kHz・納品検査の自動記録 | 48kHz標準、ピーク測定は実装済み。試聴・目視と商用基準は手動確認 | [納品の形式と検品](https://github.com/AutoDevJapan/KaraokeMaker/issues/5) |
 
-2026-10-04のオーナー指示により、現在はADJでの本人の試用を先に行い、出品と出品の相談を止める。将来の受注開始には、権利確認済みサンプルでの全編試聴・字幕目視と制作時間の記録が必要。元の伴奏を提供してもらう案件でも、表示と納品の検品は省略しない。
+2026-10-06の全作業再開指示に従い、出品案の相談を再開する。2026-10-04はADJの試用を優先し、出品と相談を止めていた（履歴）。本人曲への肯定的な返信とJIZURAの質問を受け取っている。受注開始には、権利確認済みサンプルでの全編試聴・字幕目視と制作時間の記録が必要。元の伴奏を提供してもらう案件でも、表示と納品の検品は省略しない。
+
+## 納品物の自動検査
+
+`inspect-delivery` は既存のFFmpeg/ffprobeで形式・長さ・全編の復号・true peakを測り、JSONに各項目の合否とファイルのSHA-256を残す。原本と納品物は変更しない。既存の結果JSONも上書きしない。追加のモデル・課金・Rust依存は不要。
+
+検品対象は音声1本、動画の映像は1本（カバー画像を除く）。複数の音声が入ったファイルは、最初の音声と別の音声が再生される場合があり、最初の音量を測るだけでは保証できないため不合格にする。1曲の歌入り版と伴奏版は別の動画で納品する。
+
+動画の音声も48kHz・ステレオを検査する。QuickTime MOVをMP4という名前に変えただけのファイルは不合格。動画と音声それぞれの長さが取得できない場合も「不明」の不合格として残し、検査項目を省いて合格にしない。AACのビットレートや字幕・追加データの内容は別途検品する。
+
+```powershell
+karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-lyric.mp4 --wav ./delivery/song-karaoke.wav --mp3 ./delivery/song-karaoke.mp3 --preset 1080p --output ./delivery/inspection-lyric.json
+karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-karaoke.mp4 --preset 1080p --output ./delivery/inspection-karaoke.json
+```
+
+動画・WAV・MP3は1つ以上指定する。動画2本は別々に検査する。横4Kは `--preset 4k`、横1440pは `1440p`、縦1080pは `vertical` を使う。元音源との差は0.25秒未満、動画はH.264/yuv420p・指定寸法・30fps・AAC、WAVは24bit/48kHz/stereo、MP3は形式、true peakは-1dBTP以下を基準にする。無音・破損・途中で切れた出力も検査する。
+
+自動検査の不合格はJSONを残して終了コード1、合格は0。ファイルなし等の入力の誤りではJSONを作らず1になる。JSONの `automatic_result: pass` は形式面の合格に限る。`manual_review_complete` は常にfalseで、受領時の原本ハッシュとの照合、全編試聴、字幕と画面の目視、正本との照合、別プレイヤーの再生、権利と納品対象の確認を未確認として残す。この記録だけで納品可と判断しない。
 
 利用する版とライセンスは [dependencies.md](dependencies.md) を参照する。
