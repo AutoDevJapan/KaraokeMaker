@@ -13,7 +13,11 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
@@ -24,6 +28,7 @@ pub struct Workspace {
     broker: Broker,
     busy: std::sync::Arc<Semaphore>,
     records: std::sync::Mutex<()>,
+    validated_audio: std::sync::Mutex<BTreeSet<String>>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Song {
@@ -80,6 +85,7 @@ impl Workspace {
             root,
             busy: std::sync::Arc::new(Semaphore::new(1)),
             records: std::sync::Mutex::new(()),
+            validated_audio: std::sync::Mutex::new(BTreeSet::new()),
         };
         for mut song in workspace.list() {
             if song
@@ -162,6 +168,21 @@ impl Workspace {
         fs::rename(&temp, &target)?;
         Ok(())
     }
+    fn verified_audio(&self, project: &str, clip: &str, audio: &ImportedAudio) -> Result<PathBuf> {
+        // Always check the current bytes/hash. Cache only successful content
+        // validation, so range playback does not launch decoders repeatedly.
+        let path = music_import::verified_path(&self.root, project, clip, audio)?;
+        let mut validated = self
+            .validated_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !validated.contains(&audio.sha256) {
+            music_import::validate_saved(&path)?;
+            validated.insert(audio.sha256.clone());
+        }
+        Ok(path)
+    }
+
     fn list(&self) -> Vec<Song> {
         let Ok(entries) = fs::read_dir(self.root.join("projects")) else {
             return Vec::new();
@@ -700,25 +721,32 @@ async fn select(
     if token.csrf != app.csrf {
         return fail("音楽制作の画面を開き直してください。");
     }
-    let saved = app.music.update(&id, |song| {
-        if !song
-            .clips
-            .iter()
-            .any(|clip| clip.id == token.clip && clip.status == "complete")
-        {
-            anyhow::bail!("完成した曲の候補を選んでください。");
-        }
-        let imported = song
-            .audio
-            .get(&token.clip)
-            .ok_or_else(|| anyhow::anyhow!("先に候補の公式MP3を取り込んでください。"))?;
-        music_import::verified_path(&app.music.root, &id, &token.clip, imported)?;
-        song.selected = Some(token.clip);
-        song.stage = "selected".into();
-        Ok(())
-    });
-    if let Err(error) = saved {
-        return fail(error);
+    let music = app.music.clone();
+    let project = id.clone();
+    let saved = tokio::task::spawn_blocking(move || {
+        music.update(&project, |song| {
+            if !song
+                .clips
+                .iter()
+                .any(|clip| clip.id == token.clip && clip.status == "complete")
+            {
+                anyhow::bail!("完成した曲の候補を選んでください。");
+            }
+            let imported = song
+                .audio
+                .get(&token.clip)
+                .ok_or_else(|| anyhow::anyhow!("先に候補の公式MP3を取り込んでください。"))?;
+            music.verified_audio(&project, &token.clip, imported)?;
+            song.selected = Some(token.clip);
+            song.stage = "selected".into();
+            Ok(())
+        })
+    })
+    .await;
+    match saved {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return fail(error),
+        Err(error) => return fail(error),
     }
     Redirect::to(&format!("/music/{id}")).into_response()
 }
@@ -764,6 +792,7 @@ async fn import_audio(
         let mut clip_id = None;
         let mut complete = false;
         let mut data = None;
+        let mut replaceable_hash = None;
         while let Some(field) = multipart.next_field().await? {
             match field.name() {
                 Some("csrf") if csrf.is_none() => {
@@ -800,10 +829,26 @@ async fn import_audio(
                     );
                     if let Some(existing) = song.audio.get(clip_id.as_ref().unwrap()) {
                         use sha2::{Digest, Sha256};
-                        ensure!(
-                            existing.sha256 == format!("{:x}", Sha256::digest(&bytes)),
-                            "保存済みの候補と内容が違います。別の音源で上書きできません。"
-                        );
+                        if existing.sha256 != format!("{:x}", Sha256::digest(&bytes)) {
+                            let music = app.music.clone();
+                            let project = id.clone();
+                            let clip = clip_id.as_ref().unwrap().clone();
+                            let existing = existing.clone();
+                            let hash = existing.sha256.clone();
+                            let checked = tokio::task::spawn_blocking(move || {
+                                music.verified_audio(&project, &clip, &existing)
+                            })
+                            .await?;
+                            match checked {
+                                Err(error) if music_import::is_incomplete(&error) => {
+                                    replaceable_hash = Some(hash)
+                                }
+                                Err(error) => return Err(error),
+                                Ok(_) => anyhow::bail!(
+                                    "保存済みの候補と内容が違います。別の音源で上書きできません。"
+                                ),
+                            }
+                        }
                     }
                     data = Some(bytes);
                 }
@@ -828,7 +873,8 @@ async fn import_audio(
                 .context("この下書きの候補が見つかりません。")?;
             if let Some(existing) = song.audio.get(&clip) {
                 ensure!(
-                    existing.sha256 == imported.sha256,
+                    existing.sha256 == imported.sha256
+                        || replaceable_hash.as_ref() == Some(&existing.sha256),
                     "保存済みの候補と内容が違います。別の音源で上書きできません。"
                 );
             }
@@ -854,22 +900,23 @@ async fn audio(
     WebPath((id, clip)): WebPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let result = (|| -> Result<PathBuf> {
-        let song = app.music.load(&id)?;
+    let music = app.music.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
+        let song = music.load(&id)?;
         ensure!(
             song.clips
                 .iter()
                 .any(|c| c.id == clip && c.status == "complete"),
             "保存した候補がありません。"
         );
-        music_import::verified_path(
-            &app.music.root,
+        music.verified_audio(
             &id,
             &clip,
             song.audio.get(&clip).context("音源がありません。")?,
         )
-    })();
-    let Ok(requested) = result else {
+    })
+    .await;
+    let Ok(Ok(requested)) = result else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Ok(path) = requested.canonicalize() else {
@@ -1139,6 +1186,130 @@ mod tests {
         assert!(attach_ids(&mut song, first).is_err());
         assert!(attach_ids(&mut song, "../outside").is_err());
         assert_eq!(song.clips[0].id, first);
+    }
+
+    #[tokio::test]
+    async fn incomplete_import_cannot_be_selected_and_legacy_audio_can_be_repaired() {
+        use sha2::{Digest, Sha256};
+        let temp = tempfile::tempdir().unwrap();
+        let app = App::new(temp.path(), 19531).unwrap();
+        let mut song = fixture();
+        let clip = "00000000-0000-4000-8000-000000000001";
+        attach_ids(&mut song, clip).unwrap();
+        app.music.save(&song).unwrap();
+        let (normal, variants) = music_import::tests::synthetic_variants(temp.path());
+        let router = web::router(app.clone());
+        let import = |bytes: &[u8]| {
+            let mut body = format!("--demo\r\nContent-Disposition: form-data; name=\"csrf\"\r\n\r\n{}\r\n--demo\r\nContent-Disposition: form-data; name=\"clip\"\r\n\r\n{clip}\r\n--demo\r\nContent-Disposition: form-data; name=\"complete\"\r\n\r\ntrue\r\n--demo\r\nContent-Disposition: form-data; name=\"media\"; filename=\"official.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n", app.csrf).into_bytes();
+            body.extend_from_slice(bytes);
+            body.extend_from_slice(b"\r\n--demo--\r\n");
+            Request::builder()
+                .method("POST")
+                .uri(format!("/music/{}/import", song.id))
+                .header(header::HOST, "127.0.0.1:19531")
+                .header(header::CONTENT_TYPE, "multipart/form-data; boundary=demo")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let select = || {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/music/{}/select", song.id))
+                .header(header::HOST, "127.0.0.1:19531")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf={}&clip={clip}", app.csrf)))
+                .unwrap()
+        };
+        for bytes in &variants {
+            assert_eq!(
+                router
+                    .clone()
+                    .oneshot(import(bytes))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+            let saved = app.music.load(&song.id).unwrap();
+            assert!(saved.audio.is_empty() && saved.selected.is_none());
+            assert_eq!(saved.clips[0].status, "awaiting_import");
+            assert_eq!(
+                router.clone().oneshot(select()).await.unwrap().status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        // Seed synthetic storage exactly as the old importer did; no real
+        // project data is read or modified by this compatibility regression.
+        let broken = &variants[1];
+        let legacy = ImportedAudio {
+            sha256: format!("{:x}", Sha256::digest(broken)),
+            bytes: broken.len() as u64,
+            duration_seconds: 5.0,
+        };
+        let directory = app.music.root.join("audio").join(&song.id).join(clip);
+        let old_path = directory.join(format!("{}.mp3", legacy.sha256));
+        fs::write(&old_path, broken).unwrap();
+        song.audio.insert(clip.into(), legacy);
+        song.clips[0].status = "complete".into();
+        app.music.save(&song).unwrap();
+        assert_eq!(
+            router.clone().oneshot(select()).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/music/{}/audio/{clip}", song.id))
+                        .header(header::HOST, "127.0.0.1:19531")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(import(&normal))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SEE_OTHER
+        );
+        assert_eq!(
+            router.clone().oneshot(select()).await.unwrap().status(),
+            StatusCode::SEE_OTHER
+        );
+        let mut other = normal.clone();
+        other.extend_from_slice(&[0; 128]);
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(import(&other))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(fs::read(old_path).unwrap(), *broken);
+        assert_eq!(fs::read(temp.path().join("synthetic.mp3")).unwrap(), normal);
+        let restarted = App::new(temp.path(), 19531).unwrap();
+        let saved = restarted.music.load(&song.id).unwrap();
+        assert_eq!(saved.selected.as_deref(), Some(clip));
+        assert_eq!(
+            fs::read(
+                restarted
+                    .music
+                    .verified_audio(&song.id, clip, &saved.audio[clip])
+                    .unwrap()
+            )
+            .unwrap(),
+            normal
+        );
     }
 
     #[tokio::test]
