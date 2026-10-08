@@ -259,6 +259,7 @@ fn mp3_duration(dir: &Path, input: &Path, bytes: &[u8]) -> Result<f64> {
     {
         return Err(IncompleteMp3.into());
     }
+    let (errors_guard, errors) = temporary(dir, "decode-errors")?;
     let mut decoder = crate::media::hidden_command(&tools.ffmpeg)
         .args([
             "-v",
@@ -275,10 +276,14 @@ fn mp3_duration(dir: &Path, input: &Path, bytes: &[u8]) -> Result<f64> {
         .args(["-map", "0:a:0", "-f", "null", "-"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(errors))
         .spawn()
         .context("MP3の検査に必要なffmpegを起動できませんでした。")?;
-    if !wait_for_media(&mut decoder, Instant::now())?.success() {
+    // Some FFmpeg versions report a damaged audio frame at error level but
+    // still exit successfully. With -v error, any diagnostic is a failure.
+    if !wait_for_media(&mut decoder, Instant::now())?.success()
+        || fs::metadata(&errors_guard.0)?.len() != 0
+    {
         return Err(IncompleteMp3.into());
     }
     Ok(duration)
