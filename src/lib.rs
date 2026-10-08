@@ -1,5 +1,6 @@
 pub mod alignment;
 pub mod entry;
+pub mod inspect;
 pub mod lyrics;
 pub mod media;
 pub mod model;
