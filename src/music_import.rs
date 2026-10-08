@@ -111,6 +111,8 @@ pub(crate) fn is_incomplete(error: &anyhow::Error) -> bool {
 // Xing/Info frame counts describe audio frames, excluding the tag frame.
 // Match FFmpeg's MP3 demuxer offsets; do not infer completeness from an
 // estimated duration when this optional header is absent.
+// LAME VbrTag.c deliberately keeps this offset unchanged even with CRC
+// protection (it subtracts the CRC size from sideinfo_len for the tag).
 struct Mp3Declaration {
     frames: Option<u64>,
     stream_bytes: Option<usize>,
@@ -276,7 +278,7 @@ fn mp3_duration(dir: &Path, input: &Path, bytes: &[u8]) -> Result<f64> {
         .stderr(Stdio::null())
         .spawn()
         .context("MP3の検査に必要なffmpegを起動できませんでした。")?;
-    if !wait_for_media(&mut decoder, started)?.success() {
+    if !wait_for_media(&mut decoder, Instant::now())?.success() {
         return Err(IncompleteMp3.into());
     }
     Ok(duration)
@@ -450,6 +452,20 @@ pub(crate) mod tests {
             fs::read(verified_path(temp.path(), PROJECT, CLIP, &audio).unwrap()).unwrap(),
             normal
         );
+    }
+
+    #[test]
+    fn xing_tag_offset_stays_fixed_for_a_crc_protected_tag_frame() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut normal, variants) = synthetic_variants(temp.path());
+        let declaration = declared_frames(&normal).unwrap();
+        normal[declaration.offset + 1] &= !1;
+        assert_eq!(declared_frames(&normal).unwrap().frames, declaration.frames);
+        let clip = Uuid::new_v4().to_string();
+        assert!(import_mp3(temp.path(), PROJECT, &clip, &normal).is_ok());
+        let mut truncated = variants[1].clone();
+        truncated[declaration.offset + 1] &= !1;
+        assert!(import_mp3(temp.path(), PROJECT, CLIP, &truncated).is_err());
     }
 
     #[test]
