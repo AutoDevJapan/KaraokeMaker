@@ -1,0 +1,552 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index c42072d..e15ce91 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -295,6 +295,20 @@ dependencies = [
+  "ureq",
+ ]
+ 
++[[package]]
++name = "cc-todo"
++version = "0.1.0"
++dependencies = [
++ "cc-ask",
++ "cc-job-policy",
++ "cc-scheduler",
++ "chrono",
++ "clap",
++ "serde_json",
++ "uuid",
++ "windows-sys 0.61.2",
++]
++
+ [[package]]
+ name = "cfg-if"
+ version = "1.0.4"
+@@ -947,6 +961,7 @@ dependencies = [
+  "cc-ask",
+  "cc-chrome",
+  "cc-scheduler",
++ "cc-todo",
+  "chrono",
+  "proc-macro2",
+  "regex",
+diff --git a/Cargo.toml b/Cargo.toml
+index 9af214e..834ab2c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -16,6 +16,7 @@ tracing = "0.1"
+ tracing-subscriber = "0.3"
+ cc-ask = { path = "../rs/cc-ask" }
+ cc-scheduler = { path = "../rs/cc-scheduler" }
++cc-todo = { path = "../rs/cc-todo" }
+ chrono = "0.4"
+ regex = "1"
+ proc-macro2 = "1"
+diff --git a/src/agent.rs b/src/agent.rs
+index f497b7a..deccb60 100644
+--- a/src/agent.rs
++++ b/src/agent.rs
+@@ -21,6 +21,8 @@ use std::{
+ const LIMIT: usize = 128 * 1024;
+ #[path = "agent_workspace.rs"]
+ mod source_workspace;
++#[path = "todo_receipts.rs"]
++mod todo_receipts;
+ const HISTORY_SECONDS: u64 = 7 * 24 * 60 * 60;
+ const TODO_CONTEXT: &str = "\n共有ToDoの文脈:\n";
+ const REQUEST_FORUM: &str = "1554771264298819675";
+@@ -89,6 +91,12 @@ pub fn windowless(cmd: &mut Command) -> &mut Command {
+ 
+ /// Injectable boundary: tests never invoke Discord, gh, or Codex.
+ trait Runner: Send + Sync {
++    fn receipt_exists(&self, path: &Path) -> Result<bool> {
++        checked_receipt_exists(path)
++    }
++    fn ensure_todo(&self, paths: &Paths, request: &Value) -> Result<Value> {
++        todo_receipts::ensure(paths, request)
++    }
+     fn run(&self, program: &Path, args: &[String], cwd: &Path) -> Result<String>;
+     fn stall_capacity(&self, _paths: &Paths, _item: Option<&Value>) -> Result<bool> {
+         Ok(true)
+@@ -526,6 +534,53 @@ impl Console {
+         groups.sort_by_key(|g| (strv(g, "project") != "owner", strv(g, "project").to_owned()));
+         Ok(json!({"groups":groups,"items":db["items"],"projects":db["projects"]}))
+     }
++    fn ensure_todo(&self, v: &Value) -> Result<Value> {
++        let _guard = self.lock.lock().map_err(|_| io_fault())?;
++        let _state_guard = self.state_guard()?;
++        let request_id = field(v, "request_id", 100)?;
++        if !safe_id(request_id, 100) {
++            return Err(invalid());
++        }
++        let project = field(v, "project", 100)?;
++        let title = field(v, "title", 2000)?;
++        let note = field(v, "note", 7800)?;
++        let request = json!({"request_id":request_id,"project":project,"title":title,"note":note});
++        let receipt_path = self
++            .paths
++            .state
++            .join("todo-receipts")
++            .join(format!("{}.json", key_hash(request_id)));
++        let db = self.todos()?;
++        if self.runner.receipt_exists(&receipt_path)? {
++            let receipt: Value = serde_json::from_str(&read_text(&receipt_path, 64 * 1024)?)
++                .map_err(|_| io_fault())?;
++            if receipt["request"] != request {
++                return Err(fault(
++                    StatusCode::CONFLICT,
++                    "request_id_conflict",
++                    "受付番号が別の作業に使われています。",
++                ));
++            }
++            let item = db["items"]
++                .as_array()
++                .ok_or_else(io_fault)?
++                .iter()
++                .find(|item| item["id"] == receipt["id"] && strv(item, "project") == project)
++                .ok_or_else(io_fault)?;
++            if item
++                .get("console_creation_request")
++                .is_some_and(|created| *created != request)
++            {
++                return Err(fault(
++                    StatusCode::CONFLICT,
++                    "request_id_conflict",
++                    "受付番号が別の作業に使われています。",
++                ));
++            }
++            return Ok(json!({"request_id":request_id,"item":item}));
++        }
++        self.runner.ensure_todo(&self.paths, &request)
++    }
+     fn todo_write(&self, action: &str, v: &Value) -> Result<Value> {
+         let db = self.todos()?;
+         let mut args = Vec::new();
+@@ -1680,6 +1735,9 @@ impl Console {
+         if *method == Method::GET && path == "handoff" {
+             return self.handoff(&self.read_state()?, &self.jobs()?);
+         }
++        if *method == Method::POST && path == "todo/ensure" {
++            return self.ensure_todo(&v);
++        }
+         if *method == Method::POST && path.starts_with("todo/") {
+             let action = path.strip_prefix("todo/").ok_or_else(invalid)?;
+             if matches!(action, "add" | "start" | "block" | "unblock" | "done") {
+@@ -2318,6 +2376,10 @@ fn redact(text: &str) -> String {
+     }
+     safe
+ }
++fn checked_receipt_exists(path: &Path) -> Result<bool> {
++    path.try_exists().map_err(|_| io_fault())
++}
++
+ /// Stable 128-bit identifier for the launcher's idempotency ledger (not a security primitive).
+ fn key_hash(s: &str) -> String {
+     let hash = |seed: u64| {
+@@ -2676,11 +2738,29 @@ mod tests {
+         pr_state: Mutex<String>,
+         lose_receipt: Mutex<bool>,
+         fail_todo: Mutex<bool>,
++        fail_receipt_metadata: Mutex<bool>,
+         stall_allow: Mutex<bool>,
+         admission_remaining: Mutex<Option<usize>>,
+         admission_change: Mutex<Option<Value>>,
+     }
+     impl Runner for Fake {
++        fn receipt_exists(&self, path: &Path) -> Result<bool> {
++            if *self.fail_receipt_metadata.lock().unwrap() {
++                Err(io_fault())
++            } else {
++                checked_receipt_exists(path)
++            }
++        }
++        fn ensure_todo(&self, paths: &Paths, request: &Value) -> Result<Value> {
++            if *self.fail_todo.lock().unwrap() {
++                return Err(external());
++            }
++            let result = todo_receipts::ensure(paths, request)?;
++            if std::mem::take(&mut *self.lose_receipt.lock().unwrap()) {
++                return Err(external());
++            }
++            Ok(result)
++        }
+         fn global_capacity(&self, _: &Paths) -> Result<bool> {
+             Ok(*self.stall_allow.lock().unwrap()
+                 && *self.admission_remaining.lock().unwrap() != Some(0))
+@@ -2790,8 +2870,16 @@ mod tests {
+             if args[0] == "add" {
+                 let id = db["next_id"].as_u64().unwrap();
+                 db["next_id"] = json!(id + 1);
+-                db["items"].as_array_mut().unwrap().push(json!({"id":id,"project":args[1],"title":args[2],"note":"","jobs":[],"status":"todo"}));
++                let note = args
++                    .iter()
++                    .position(|s| s == "--note")
++                    .map(|i| args[i + 1].as_str())
++                    .unwrap_or("");
++                db["items"].as_array_mut().unwrap().push(json!({"id":id,"project":args[1],"title":args[2],"note":note,"jobs":[],"status":"todo"}));
+                 fs::write(&file, db.to_string()).unwrap();
++                if std::mem::take(&mut *self.lose_receipt.lock().unwrap()) {
++                    return Err(external());
++                }
+                 return Ok(format!("added {id}"));
+             }
+             let id = args[1].parse::<u64>().unwrap();
+@@ -2869,6 +2957,7 @@ mod tests {
+                 pr_state: Mutex::new("OPEN".into()),
+                 lose_receipt: Mutex::new(false),
+                 fail_todo: Mutex::new(false),
++                fail_receipt_metadata: Mutex::new(false),
+                 stall_allow: Mutex::new(true),
+                 admission_remaining: Mutex::new(None),
+                 admission_change: Mutex::new(None),
+@@ -4638,6 +4727,349 @@ mod tests {
+             .launches
+             .contains_key("manual:one"));
+     }
++    #[test]
++    fn receipt_metadata_errors_cannot_create_another_item() {
++        let f = Fixture::new();
++        let body = json!({"request_id":"legacy-read-error","project":"demo","title":"合成曲の担当","note":"本文"});
++        f.console
++            .todo_write(
++                "add",
++                &json!({"project":"demo","title":"合成曲の担当","note":"古い受付"}),
++            )
++            .unwrap();
++        f.console
++            .todo_write("block", &json!({"id":2,"reason":"変更したメモ"}))
++            .unwrap();
++        let dir = f.console.paths.state.join("todo-receipts");
++        fs::create_dir_all(&dir).unwrap();
++        fs::write(
++            dir.join(format!("{}.json", key_hash("legacy-read-error"))),
++            json!({"request":body,"id":2}).to_string(),
++        )
++        .unwrap();
++        let store = f.console.paths.todo.join("todo.json");
++        let before = fs::read(&store).unwrap();
++        *f.fake.fail_receipt_metadata.lock().unwrap() = true;
++        assert_eq!(
++            f.console
++                .api(&Method::POST, "todo/ensure", body.clone())
++                .unwrap_err()
++                .status,
++            StatusCode::SERVICE_UNAVAILABLE
++        );
++        assert_eq!(fs::read(&store).unwrap(), before);
++        *f.fake.fail_receipt_metadata.lock().unwrap() = false;
++        let recovered = f.console.api(&Method::POST, "todo/ensure", body).unwrap();
++        assert_eq!(recovered["item"]["id"], 2);
++        assert_eq!(recovered["item"]["note"], "変更したメモ");
++        assert_eq!(fs::read(&store).unwrap(), before);
++        assert!(!checked_receipt_exists(&dir.join("missing.json")).unwrap());
++        assert_eq!(
++            checked_receipt_exists(&dir.join("invalid\0name.json"))
++                .unwrap_err()
++                .status,
++            StatusCode::SERVICE_UNAVAILABLE
++        );
++    }
++
++    #[test]
++    fn legacy_notes_do_not_authorize_recovery_but_committed_receipts_do() {
++        let f = Fixture::new();
++        let body = json!({"request_id":"legacy-once","project":"demo","title":"合成曲の担当","note":"本文"});
++        f.console.todo_write("add", &json!({"project":"demo","title":"合成曲の担当","note":"受付識別子: legacy-once\n本文"})).unwrap();
++        assert_eq!(
++            f.console
++                .api(&Method::POST, "todo/ensure", body.clone())
++                .unwrap_err()
++                .code,
++            "legacy_receipt_unverified"
++        );
++        assert_eq!(
++            f.console.todos().unwrap()["items"]
++                .as_array()
++                .unwrap()
++                .len(),
++            2
++        );
++        let dir = f.console.paths.state.join("todo-receipts");
++        fs::create_dir_all(&dir).unwrap();
++        fs::write(
++            dir.join(format!("{}.json", key_hash("legacy-once"))),
++            json!({"request":body,"id":2}).to_string(),
++        )
++        .unwrap();
++        f.console
++            .todo_write("block", &json!({"id":2,"reason":"メモを変更した"}))
++            .unwrap();
++        assert_eq!(
++            f.console.api(&Method::POST, "todo/ensure", body).unwrap()["item"]["id"],
++            2
++        );
++        assert_eq!(
++            f.console.todos().unwrap()["items"]
++                .as_array()
++                .unwrap()
++                .len(),
++            2
++        );
++    }
++
++    #[test]
++    fn note_markers_never_replace_an_existing_immutable_request() {
++        for finish in [false, true] {
++            let f = Fixture::new();
++            let a = json!({"request_id":"req-a","project":"demo","title":"合成曲の担当","note":"受付識別子: req-b\n本文"});
++            let b =
++                json!({"request_id":"req-b","project":"demo","title":"合成曲の担当","note":"本文"});
++            let a_id = f
++                .console
++                .api(&Method::POST, "todo/ensure", a.clone())
++                .unwrap()["item"]["id"]
++                .as_i64()
++                .unwrap();
++            let b_id = f
++                .console
++                .api(&Method::POST, "todo/ensure", b.clone())
++                .unwrap()["item"]["id"]
++                .as_i64()
++                .unwrap();
++            assert_ne!(a_id, b_id);
++            let paths = cc_todo::Paths::at(&f.console.paths.todo, &f.console.paths.jobs);
++            {
++                let _lock = cc_todo::Lock::acquire(&paths.lock, Duration::from_secs(1)).unwrap();
++                let mut db = cc_todo::load(&paths.store).unwrap();
++                let note = "受付識別子: req-c\n次の本文".to_owned();
++                let command = if finish {
++                    cc_todo::Command::Done { id: a_id, note }
++                } else {
++                    cc_todo::Command::Block {
++                        id: a_id,
++                        reason: note,
++                        progress: None,
++                    }
++                };
++                cc_todo::execute(&mut db, &command, &paths).unwrap();
++                cc_todo::save(&paths.store, &db).unwrap();
++            }
++            let c = json!({"request_id":"req-c","project":"demo","title":"合成曲の担当","note":"次の本文"});
++            let c_id = f
++                .console
++                .api(&Method::POST, "todo/ensure", c.clone())
++                .unwrap()["item"]["id"]
++                .as_i64()
++                .unwrap();
++            assert_ne!(c_id, a_id);
++            assert_ne!(c_id, b_id);
++            for (body, id) in [(a, a_id), (b, b_id), (c, c_id)] {
++                let item = f
++                    .console
++                    .api(&Method::POST, "todo/ensure", body.clone())
++                    .unwrap()["item"]
++                    .clone();
++                assert_eq!(item["id"], id);
++                assert_eq!(item["console_creation_request"], body);
++            }
++            assert_eq!(
++                f.console.todos().unwrap()["items"]
++                    .as_array()
++                    .unwrap()
++                    .len(),
++                4
++            );
++        }
++    }
++
++    #[test]
++    fn atomic_receipt_survives_lost_response_block_and_done_note_changes() {
++        for finish in [false, true] {
++            let f = Fixture::new();
++            let body = json!({"request_id":"music-atomic","project":"demo","title":"合成曲の担当","note":"元の要求"});
++            *f.fake.lose_receipt.lock().unwrap() = true;
++            assert!(f
++                .console
++                .api(&Method::POST, "todo/ensure", body.clone())
++                .is_err());
++            let paths = cc_todo::Paths::at(&f.console.paths.todo, &f.console.paths.jobs);
++            {
++                let _lock = cc_todo::Lock::acquire(&paths.lock, Duration::from_secs(1)).unwrap();
++                let mut db = cc_todo::load(&paths.store).unwrap();
++                let command = if finish {
++                    cc_todo::Command::Done {
++                        id: 2,
++                        note: "完了の理由".into(),
++                    }
++                } else {
++                    cc_todo::Command::Block {
++                        id: 2,
++                        reason: "判断待ちの理由".into(),
++                        progress: None,
++                    }
++                };
++                cc_todo::execute(&mut db, &command, &paths).unwrap();
++                cc_todo::save(&paths.store, &db).unwrap();
++            }
++            let restarted = Console {
++                paths: f.console.paths.clone(),
++                runner: f.fake.clone(),
++                lock: Mutex::new(()),
++            };
++            let result = restarted
++                .api(&Method::POST, "todo/ensure", body.clone())
++                .unwrap();
++            assert_eq!(result["item"]["id"], 2);
++            assert_eq!(
++                result["item"]["status"],
++                if finish { "done" } else { "block" }
++            );
++            assert_eq!(result["item"]["console_creation_request"], body);
++            assert_eq!(
++                restarted.todos().unwrap()["items"]
++                    .as_array()
++                    .unwrap()
++                    .len(),
++                2
++            );
++        }
++    }
++
++    #[test]
++    fn lost_response_rejects_reusing_a_request_for_another_project() {
++        let f = Fixture::new();
++        let store = f.console.paths.todo.join("todo.json");
++        let mut db: Value = serde_json::from_slice(&fs::read(&store).unwrap()).unwrap();
++        db["projects"]["other"] = json!(f.root.join("other"));
++        fs::write(&store, db.to_string()).unwrap();
++        let body = json!({"request_id":"music-global","project":"demo","title":"合成曲の担当","note":"元の要求"});
++        *f.fake.lose_receipt.lock().unwrap() = true;
++        assert!(f
++            .console
++            .api(&Method::POST, "todo/ensure", body.clone())
++            .is_err());
++        let mut other = body.clone();
++        other["project"] = json!("other");
++        assert_eq!(
++            f.console
++                .api(&Method::POST, "todo/ensure", other)
++                .unwrap_err()
++                .code,
++            "request_id_conflict"
++        );
++        assert_eq!(
++            f.console.api(&Method::POST, "todo/ensure", body).unwrap()["item"]["id"],
++            2
++        );
++        assert_eq!(
++            f.console.todos().unwrap()["items"]
++                .as_array()
++                .unwrap()
++                .len(),
++            2
++        );
++    }
++
++    #[test]
++    fn todo_receipts_keep_distinct_requests_independent() {
++        let f = Fixture::new();
++        let body = json!({"request_id":"music-one","project":"demo", "title":"合成曲の担当","note":"合成確認"});
++        let first = f
++            .console
++            .api(&Method::POST, "todo/ensure", body.clone())
++            .unwrap();
++        let mut other = body.clone();
++        other["request_id"] = json!("music-two");
++        let second = f
++            .console
++            .api(&Method::POST, "todo/ensure", other.clone())
++            .unwrap();
++        assert_ne!(first["item"]["id"], second["item"]["id"]);
++        assert_eq!(
++            f.console.api(&Method::POST, "todo/ensure", body).unwrap()["item"]["id"],
++            first["item"]["id"]
++        );
++        assert_eq!(
++            f.console.api(&Method::POST, "todo/ensure", other).unwrap()["item"]["id"],
++            second["item"]["id"]
++        );
++        assert_eq!(
++            f.console.todos().unwrap()["items"]
++                .as_array()
++                .unwrap()
++                .len(),
++            3
++        );
++    }
++
++    #[test]
++    fn todo_receipt_recovers_cli_failure_lost_response_and_restart() {
++        let f = Fixture::new();
++        let body = json!({"request_id":"music-test-once","project":"demo",
++            "title":"合成曲の担当","note":"生成要求の合成確認"});
++        *f.fake.fail_todo.lock().unwrap() = true;
++        assert!(f
++            .console
++            .api(&Method::POST, "todo/ensure", body.clone())
++            .is_err());
++        assert_eq!(
++            f.console.todos().unwrap()["items"]
++                .as_array()
++                .unwrap()
++                .len(),
++            1
++        );
++        *f.fake.fail_todo.lock().unwrap() = false;
++        *f.fake.lose_receipt.lock().unwrap() = true;
++        assert!(f
++            .console
++            .api(&Method::POST, "todo/ensure", body.clone())
++            .is_err());
++        assert_eq!(
++            f.console.todos().unwrap()["items"]
++                .as_array()
++                .unwrap()
++                .len(),
++            2
++        );
++        let restarted = Console {
++            paths: f.console.paths.clone(),
++            runner: f.fake.clone(),
++            lock: Mutex::new(()),
++        };
++        let recovered = restarted
++            .api(&Method::POST, "todo/ensure", body.clone())
++            .unwrap();
++        assert_eq!(recovered["item"]["id"], 2);
++        assert_eq!(recovered["request_id"], "music-test-once");
++        restarted
++            .todo_write("done", &json!({"id":2,"note":"合成確認を完了"}))
++            .unwrap();
++        let recovered_again = restarted
++            .api(&Method::POST, "todo/ensure", body.clone())
++            .unwrap();
++        assert_eq!(recovered_again["item"]["id"], 2);
++        assert_eq!(recovered_again["item"]["status"], "done");
++        assert_eq!(
++            restarted.todos().unwrap()["items"]
++                .as_array()
++                .unwrap()
++                .len(),
++            2
++        );
++        let mut conflict = body.clone();
++        conflict["title"] = json!("別の作業");
++        assert_eq!(
++            restarted
++                .api(&Method::POST, "todo/ensure", conflict)
++                .unwrap_err()
++                .code,
++            "request_id_conflict"
++        );
++        let mut invalid = body;
++        invalid["request_id"] = json!("../outside");
++        assert!(restarted
++            .api(&Method::POST, "todo/ensure", invalid)
++            .is_err());
++    }
++
+     #[tokio::test]
+     async fn api_routes_validate_input_and_use_existing_todo_cli() {
+         let f = Fixture::new();
