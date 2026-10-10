@@ -111,3 +111,16 @@ karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery
 自動検査の不合格はJSONを残して終了コード1、合格は0。ファイルなし等の入力の誤りではJSONを作らず1になる。JSONの `automatic_result: pass` は形式面の合格に限る。`manual_review_complete` は常にfalseで、受領時の原本ハッシュとの照合、全編試聴、字幕と画面の目視、正本との照合、別プレイヤーの再生、権利と納品対象の確認を未確認として残す。この記録だけで納品可と判断しない。
 
 利用する版とライセンスは [dependencies.md](dependencies.md) を参照する。
+
+## 担当が作った動作確認動画の片付け（2026-10-08）
+
+担当が作成した動作例・検証録画は、検査と報告が終わり、制作中やアプリで使う最新ファイルでないことを確認してから、`D:/CC/Tools/video-archive/video-archive.exe register`へ登録する。ユーザーが持ち込んだ原曲・動画・歌詞、顧客資源、現在利用している最新の変換結果は登録・転送・削除しない。既存の外部AIへ素材を送らない規則を維持する。
+
+```text
+video-archive.exe register --source <担当が作った動画> --owned-root <登録済みの制作フォルダ> --project KaraokeMaker --purpose 動作確認 --kind 完成品 --proof <制作終了の証拠> --released
+video-archive.exe run --remove --limit 10
+```
+
+`--released`は利用中ではないことを担当が確かめた動画だけに付ける。登録時に元ファイルのSHA256を固定する。転送先はオーナー指定のGoogle Drive内の製品・用途・月別のフォルダ。公式のOAuth接続を使い、APIキー・課金・Pythonを追加しない。DriveのMD5・サイズ、一覧スプレッドシートへの記録、PCのファイルの再照合が済んだ後だけ削除する。失敗したものは元ファイルを保持し、同じ受領記録から再開する。
+
+実行ファイルと運用は別の共通道具であり、KaraokeMakerのアプリがユーザーの動画を勝手に転送する機能ではない。片付けの結果は依頼窓口の共通CLIがDiscordの「後片付けの記録」へ通知なしでまとめる。制作ジョブから二重に投稿しない。詳しくは`D:/CC/Tools/video-archive/README.md`を読む。
