@@ -1,0 +1,208 @@
+{
+  "recorded_at": "2026-10-08T20:47:46.9356295+09:00",
+  "parent": 1139,
+  "job": "20261008-122502-orch-todo-1139",
+  "source_sha": "ea762df3427bf556706bad9af42de3e583481b8f",
+  "baseline": "57406a96cd9fb4a9ffe69f735d549c9dbe791d63",
+  "pr": "https://github.com/AutoDevJapan/KaraokeMaker/pull/17",
+  "inherited": {
+    "real_media_import": null,
+    "finite_todo": 1777,
+    "windows_tests": 38,
+    "console_ignored": 1,
+    "console": "ef68ad3255a44425ff3befc710f7547629582328",
+    "console_tests": 133,
+    "karaoke": "2f62a052c5714780c933b1eddb3358cd285bc543"
+  },
+  "rejection": {
+    "target": "same existing Admin Console",
+    "tab_created": null,
+    "original_job": "20261006-221830-todo-1139",
+    "latest_reason": "This repeats previously restricted Console access without explicit post-denial approval or an approved safer route; loopback hosting alone does not resolve that restriction.",
+    "operation": "cua.createBrowserTab chrome http://localhost:10012/",
+    "original_time": "2026-10-07T12:29:48+09:00",
+    "retry_same_operation": null,
+    "protection_changes": 0,
+    "authorization_evidence": [
+      "resume-all-20261006-1139.md",
+      "README music entry",
+      "Console source loopback bind and same-origin guard",
+      "TCP listener 127.0.0.1:10012"
+    ],
+    "owner_confirmation": "Existing same-operation re-review approval question remains unanswered; no new UI attempt or duplicate tool request",
+    "alternate_routes": 0,
+    "inventory": {
+      "apps": 0,
+      "browsers": 0,
+      "observed": "2026-10-08T20:31:40.3927999+09:00"
+    }
+  },
+  "tests": {
+    "final_workspace_passed": 109,
+    "threads": 10,
+    "target": "D:/CC/BuildCache/karaokemaker-todo1139-console",
+    "features": "no-default-features",
+    "doctests": 0,
+    "long_normal": {
+      "probe_seconds": 0.2915372,
+      "decode_seconds": 0.5715915,
+      "decode_exit": 0,
+      "seconds": 895,
+      "probe_exit": 0,
+      "packet_count": 37293,
+      "bytes": 14320940
+    },
+    "windows_debug_bins_exit": 0,
+    "related_passed": 13,
+    "cases": [
+      "half truncation with retained declared length",
+      "whole frame boundary truncation",
+      "100 byte tail truncation",
+      "corrupt frame headers",
+      "corrupt side info retaining packet count",
+      "HTTP reject/select reject",
+      "old importer metadata repair same ID",
+      "old copy preserved",
+      "valid different bytes refused",
+      "selection and restart",
+      "short MPEG1/2/2.5 CBR VBR",
+      "headerless valid short MP3",
+      "CRC protected tag convention"
+    ],
+    "clippy_exit": 0,
+    "fmt_exit": 0,
+    "regression_red": "accepted invalid variant 0; nextest exit 1",
+    "skipped": 0,
+    "final_nextest_id": "f610618f-d8ed-4833-98f5-9dd22b91fbbd",
+    "wrapper": "D:/CC/Tools/sccache/sccache.exe"
+  },
+  "review": {
+    "suggestions": "two observations, no requested source fix",
+    "job": "20261008-145212-review-suno1139-mp3-portable",
+    "crc_initial_must": "corrected against LAME VbrTag.c 855-862 and FFmpeg mp3dec.c",
+    "model": "gpt-6-luna",
+    "must": 0,
+    "zero_header_counts": "unknown total; no completeness claim without independent reference"
+  },
+  "acceptance": {
+    "console_import": null,
+    "parent_complete": null,
+    "one_generation_two_existing_ids": "historically verified",
+    "publications": 0,
+    "console_reload_restart": null,
+    "additional_generation": 0,
+    "console_selection": null,
+    "contract": "historically verified",
+    "console_playback": null,
+    "browser_time_hold": "none in current instructions",
+    "real_media_file_metadata": {
+      "second_saved_file": "Checkpoint official_download contains only first path; no second matching name/ID found in Downloads metadata; other possible names and official UI remain unverified",
+      "first_bytes": 978314,
+      "media_content_read_or_sent_to_external_ai": false,
+      "first_sha256": "AFA877D57419E582867077EC735B3A4D54C5444363F57F46C4FB078E2286B267"
+    },
+    "finite_1396": "done100; real two-song Console acceptance still pending"
+  },
+  "ci": {
+    "codeql_run": 37734558513,
+    "previous_failure_run": 37734063936,
+    "superseded_runs_cancelled": [
+      37734063936,
+      37733793234,
+      37734059125,
+      37733790614
+    ],
+    "repair": "capture -v error stderr and reject nonempty diagnostics",
+    "cause": "Linux FFmpeg reports corrupted side information but exits 0",
+    "status": "success",
+    "final_run": 37734561834,
+    "main_ci": 37736578867,
+    "main_codeql": 37736577685,
+    "main_status": "success"
+  },
+  "owned_temp_id": "65d1248bc4a88d06f358f7b2fc3c79cd",
+  "deployment": {
+    "real_media_operations": 0,
+    "main_merge": "ff6a315880a09645f328f705be3c69dfcef8ef89",
+    "karaoke_binary_sha256": "64CD3CE0942814D25FD350CE8A8FC9556A295989B60144BCA28606666267C528",
+    "backup_sha256": "50FFE34DF3A9A2F42F3F38811FDC41CE3BB947F3F6CAA674ADABDBDE826ADACB",
+    "console": {
+      "health": {
+        "backend": "Rust/Axum",
+        "port": 10012,
+        "status": "ok"
+      },
+      "sha256": "8778544A5FF9241F3BD5B5F1183C0086E19696A0CD694A099D651C675D67E204",
+      "pid": 20612,
+      "created": "2026-10-08T20:28:44.880055+09:00",
+      "source_main": "9e54f67fdf4a66feb91fb2b7ee65ff05e2188d2d",
+      "task": "local-ai-web-autostart-10012",
+      "backup_sha256": "0305FDF8E511704A0ECF3E7EFB0BE3A306AB1D8CEF046ED8BE720D8D95E1F835",
+      "real_media_operations": 0,
+      "backup_path": "D:/CC/Tools/localai-web-rs/target/release/localai-web-rs.before1139-20261008-2030.exe",
+      "status": "deployed",
+      "first_copy_failure": "Windows sharing violation after process stop; old hash preserved; lock released then replacement succeeded",
+      "path": "D:/CC/Tools/localai-web-rs/target/release/localai-web-rs.exe",
+      "stability_recheck": {
+        "pid": 20612,
+        "checked_at": "2026-10-08T20:38:29.1539484+09:00",
+        "health": "ok",
+        "hash_unchanged": true
+      }
+    },
+    "integration_packet": {
+      "main_codeql": 37770049032,
+      "review_job": "20261008-160058-review-suno1139-integration-packet",
+      "main_checks": "success",
+      "module_git_blob": "a673e71a1016d476cec8f529846ada91fcc58e5f",
+      "merge": "d79d1c34a14a6f0ea974711203c86bf38a03dca2",
+      "module_candidate_sha256": "FB1E43444AB8DB1C2D2AE92E7A308759C179C9B6C14AEFF09410DE8735FC52B5",
+      "state": "MERGED",
+      "main_ci": 37770048613,
+      "suggestion": 0,
+      "model": "gpt-6-luna",
+      "nit": 0,
+      "must": 0,
+      "checks": "success",
+      "ci": 37740875991,
+      "codeql": 37740873081,
+      "line_ending_note": "checkout CRLF differs in bytes; git hash-object identical to candidate and HEAD",
+      "pr": "https://github.com/AutoDevJapan/KaraokeMaker/pull/19",
+      "head": "a608e0315f4c8609d700172c160813fe9111c631",
+      "main_source_diff_from_reviewed_head": "none in src/Cargo/integrations; later documentation preserved",
+      "module_original_checkout_sha256": "4306DA58C544898B26078E9EB7D3D7C034A31AE5BF9C4D1A6731226025510EB7",
+      "main_ci_jobs": [
+        {
+          "name": "test",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "windows",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ],
+      "main_codeql_jobs": [
+        {
+          "name": "Analyze (actions)",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Analyze (rust)",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    }
+  },
+  "cleanup": {
+    "plan": "submit_to_exec_tool",
+    "owned_id": "65d1248bc4a88d06f358f7b2fc3c79cd",
+    "finish": "source_absent",
+    "delete_exit": 0,
+    "bytes": 49547271,
+    "worktrees_records_rollback_binaries": "retained"
+  }
+}
