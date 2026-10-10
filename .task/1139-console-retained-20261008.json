@@ -1,0 +1,134 @@
+{
+  "job": "20261008-122502-orch-todo-1139",
+  "todo": 1396,
+  "parent": 1139,
+  "worktree": "D:/CC/Tools/localai-web-suno1139-retained-worktree",
+  "base": "b5b3b388013437ae94d1b71df8f73975d85925cd",
+  "head": "9e54f67fdf4a66feb91fb2b7ee65ff05e2188d2d",
+  "original_remote": "none",
+  "source_drift": {
+    "range_forwarding": false,
+    "upload_limit": 131072,
+    "response_limit": 2097152,
+    "todo_ensure_present": false
+  },
+  "repair": {
+    "request_storage": "cc-todo public Rust Lock/load/add_item/find/save: immutable metadata atomically persisted with item",
+    "cross_project_reuse": "409",
+    "music_bridge": "matches reviewed KaraokeMaker integration module except edition2021 formatting",
+    "mutable_notes": "not used to determine immutable identity",
+    "legacy_receipt": "committed matching receipt only; marker-only returns409",
+    "other_todo1597_features": "preserved by branch from latest main"
+  },
+  "dependency": {
+    "license": "PC-owned existing source; no declared redistribution license; not distributed",
+    "lib_sha256": "22D89EC4510AC8295F54701D04ABEBB8959798B3F855A9B968219D235E66BE39",
+    "code_modified": false,
+    "version": "0.1.0",
+    "source": "D:/CC/Tools/rs/cc-todo",
+    "name": "cc-todo"
+  },
+  "previous_checks": {
+    "related": 20,
+    "clippy_exit": 0,
+    "doc": "No library targets. command exit101, not applicable; not reported as success",
+    "fmt_exit": 0,
+    "release_exit": 0,
+    "ignored": 1,
+    "workspace": 169,
+    "ignored_reason": "explicit production collector smoke"
+  },
+  "final_checks": {
+    "passed": 172,
+    "execution": "previous session, not repeated",
+    "skipped": 1,
+    "workspace": 172,
+    "release_exit": 0,
+    "clippy_exit": 0,
+    "doctest": "bin only: no library targets; command exit101; not applicable",
+    "skip_reason": "explicit local-source smoke check, not part of fixture tests",
+    "fmt_exit": 0,
+    "nextest_id": "c89fe62d-8c20-4357-8290-c810cdd34c06"
+  },
+  "final_review": {
+    "suggestion_scope": "independent Console instances and CLI concurrency test; no defect confirmed",
+    "job": "20261008-155215-review-suno1139-console-final-io",
+    "model": "gpt-6-astra",
+    "nit": 0,
+    "must": 0,
+    "head": "9e54f67fdf4a66feb91fb2b7ee65ff05e2188d2d",
+    "suggestion": 1
+  },
+  "browser_operation": "Existing same-operation re-review denied; prior approval question unanswered; no time hold in current instructions; inventory apps/browsers empty",
+  "deployment": {
+    "health": {
+      "backend": "Rust/Axum",
+      "port": 10012,
+      "status": "ok"
+    },
+    "sha256": "8778544A5FF9241F3BD5B5F1183C0086E19696A0CD694A099D651C675D67E204",
+    "pid": 20612,
+    "created": "2026-10-08T20:28:44.880055+09:00",
+    "source_main": "9e54f67fdf4a66feb91fb2b7ee65ff05e2188d2d",
+    "task": "local-ai-web-autostart-10012",
+    "backup_sha256": "0305FDF8E511704A0ECF3E7EFB0BE3A306AB1D8CEF046ED8BE720D8D95E1F835",
+    "real_media_operations": 0,
+    "backup_path": "D:/CC/Tools/localai-web-rs/target/release/localai-web-rs.before1139-20261008-2030.exe",
+    "status": "deployed",
+    "first_copy_failure": "Windows sharing violation after process stop; old hash preserved; lock released then replacement succeeded",
+    "path": "D:/CC/Tools/localai-web-rs/target/release/localai-web-rs.exe",
+    "stability_recheck": {
+      "pid": 20612,
+      "checked_at": "2026-10-08T20:38:29.1539484+09:00",
+      "health": "ok",
+      "hash_unchanged": true
+    }
+  },
+  "recorded_at": "2026-10-08T20:47:46.9356295+09:00",
+  "integration_packet": {
+    "main_codeql": 37770049032,
+    "review_job": "20261008-160058-review-suno1139-integration-packet",
+    "main_checks": "success",
+    "module_git_blob": "a673e71a1016d476cec8f529846ada91fcc58e5f",
+    "merge": "d79d1c34a14a6f0ea974711203c86bf38a03dca2",
+    "module_candidate_sha256": "FB1E43444AB8DB1C2D2AE92E7A308759C179C9B6C14AEFF09410DE8735FC52B5",
+    "state": "MERGED",
+    "main_ci": 37770048613,
+    "suggestion": 0,
+    "model": "gpt-6-luna",
+    "nit": 0,
+    "must": 0,
+    "checks": "success",
+    "ci": 37740875991,
+    "codeql": 37740873081,
+    "line_ending_note": "checkout CRLF differs in bytes; git hash-object identical to candidate and HEAD",
+    "pr": "https://github.com/AutoDevJapan/KaraokeMaker/pull/19",
+    "head": "a608e0315f4c8609d700172c160813fe9111c631",
+    "main_source_diff_from_reviewed_head": "none in src/Cargo/integrations; later documentation preserved",
+    "module_original_checkout_sha256": "4306DA58C544898B26078E9EB7D3D7C034A31AE5BF9C4D1A6731226025510EB7",
+    "main_ci_jobs": [
+      {
+        "name": "test",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "name": "windows",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ],
+    "main_codeql_jobs": [
+      {
+        "name": "Analyze (actions)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "name": "Analyze (rust)",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  }
+}
