@@ -289,17 +289,31 @@ fn mp3_duration(dir: &Path, input: &Path, bytes: &[u8]) -> Result<f64> {
     Ok(duration)
 }
 
-pub(crate) fn validate_saved(path: &Path) -> Result<()> {
+pub(crate) fn validate_saved(path: &Path, expected_hash: &str) -> Result<f64> {
     let mut bytes = Vec::new();
     fs::File::open(path)?
         .take(MAX_MP3 as u64 + 1)
         .read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= MAX_MP3, "MP3は16MB以内で選んでください。");
-    mp3_duration(
-        path.parent().context("音源の保存先がありません。")?,
-        path,
-        &bytes,
-    )?;
+    ensure!(
+        format!("{:x}", Sha256::digest(&bytes)) == expected_hash,
+        "保存した音源の内容が変わっています。"
+    );
+    let dir = path.parent().context("音源の保存先がありません。")?;
+    // Both the hash and the media tools consume this one captured byte set.
+    // The original pathname may be replaced after reading it.
+    let (snapshot, mut file) = temporary(dir, "mp3")?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    mp3_duration(dir, &snapshot.0, &bytes)
+}
+
+pub(crate) fn require_finished_song(duration: f64) -> Result<()> {
+    ensure!(
+        duration.is_finite() && duration >= 180.0,
+        "180秒未満の曲は未完成です。SunoのExtendとGet Whole Songで全曲に仕上げてから取り込んでください。"
+    );
     Ok(())
 }
 
@@ -376,6 +390,26 @@ pub fn verified_path(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[test]
+    fn finished_song_duration_requires_at_least_180_actual_seconds() {
+        for duration in [0.0, 43.08, 179.999, f64::NAN, f64::INFINITY] {
+            assert!(require_finished_song(duration).is_err());
+        }
+        assert!(require_finished_song(180.0).is_ok());
+        assert!(require_finished_song(181.0).is_ok());
+    }
+
+    #[test]
+    fn saved_validation_binds_duration_to_the_expected_original_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (normal, _) = synthetic_variants(temp.path());
+        let path = temp.path().join("synthetic.mp3");
+        let expected = format!("{:x}", Sha256::digest(&normal));
+        let duration = validate_saved(&path, &expected).unwrap();
+        assert!(duration > 0.0 && duration < 180.0);
+        assert!(validate_saved(&path, &"0".repeat(64)).is_err());
+        assert_eq!(fs::read(path).unwrap(), normal);
+    }
     const PROJECT: &str = "00000000-0000-4000-8000-000000000001";
     const CLIP: &str = "00000000-0000-4000-8000-000000000002";
 

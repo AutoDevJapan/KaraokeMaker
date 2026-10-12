@@ -88,6 +88,28 @@ impl Workspace {
             validated_audio: std::sync::Mutex::new(BTreeSet::new()),
         };
         for mut song in workspace.list() {
+            // Previously selected samples are retained, but cannot carry an
+            // active completed-song selection into the new acceptance policy.
+            if let Some(clip) = song.selected.as_deref() {
+                let checked = song
+                    .audio
+                    .get(clip)
+                    .context("採用曲の音源を確認できませんでした。")
+                    .and_then(|audio| {
+                        let path =
+                            music_import::verified_path(&workspace.root, &song.id, clip, audio)?;
+                        music_import::require_finished_song(music_import::validate_saved(
+                            &path,
+                            &audio.sha256,
+                        )?)
+                    });
+                if let Err(error) = checked {
+                    song.selected = None;
+                    song.stage = "results".into();
+                    song.error = Some(error.to_string());
+                    workspace.save(&song)?;
+                }
+            }
             if song
                 .browser_task
                 .as_ref()
@@ -177,7 +199,7 @@ impl Workspace {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if !validated.contains(&audio.sha256) {
-            music_import::validate_saved(&path)?;
+            music_import::validate_saved(&path, &audio.sha256)?;
             validated.insert(audio.sha256.clone());
         }
         Ok(path)
@@ -407,7 +429,7 @@ async fn detail(State(app): State<App>, WebPath(id): WebPath<String>) -> Respons
         if clip.status == "complete" && song.audio.contains_key(&clip.id) {
             body.push_str(&format!("<form method=\"post\" action=\"/music/{id}/select\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"clip\" value=\"{}\"><button class=\"secondary\" type=\"submit\">{}</button></form>",app.csrf,clip.id,if song.selected.as_deref()==Some(&clip.id){"この曲を採用中"}else{"この曲を採用する"}));
         } else {
-            body.push_str(&format!(r#"<form method="post" enctype="multipart/form-data" action="/music/{id}/import"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="clip" value="{}"><label><input type="checkbox" name="complete" value="true" required>このIDの候補がSuno公式画面で完成していることを確認しました</label><label>この候補の公式MP3（16MB以内）<input type="file" name="media" accept="audio/mpeg,.mp3" required></label><button class="secondary" type="submit">MP3を取り込む</button><p class="hint">この曲IDのSuno公式画面から保存したファイルを選びます。原本を変更せず、このアプリへ保存します。保存を検査できた候補だけを採用できます。</p></form>"#, app.csrf, clip.id));
+            body.push_str(&format!(r#"<form method="post" enctype="multipart/form-data" action="/music/{id}/import"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="clip" value="{}"><label><input type="checkbox" name="complete" value="true" required>このIDの曲を全編聴き、歌詞・導入・展開・終結と演奏がつながり、無音や断片の反復で尺を増やしていないことを確認しました</label><label>この候補の公式MP3（16MB以内）<input type="file" name="media" accept="audio/mpeg,.mp3" required></label><button class="secondary" type="submit">MP3を取り込む</button><p class="hint">この曲IDのSuno公式画面から保存したファイルを選びます。原本を変更せず、このアプリへ保存します。保存を検査できた候補だけを採用できます。</p></form>"#, app.csrf, clip.id));
         }
         body.push_str("</div>");
     }
@@ -736,7 +758,13 @@ async fn select(
                 .audio
                 .get(&token.clip)
                 .ok_or_else(|| anyhow::anyhow!("先に候補の公式MP3を取り込んでください。"))?;
-            music.verified_audio(&project, &token.clip, imported)?;
+            let path = music.verified_audio(&project, &token.clip, imported)?;
+            // Completion is measured from the original, not editable metadata
+            // or the playback validation cache. Short imports remain drafts.
+            music_import::require_finished_song(music_import::validate_saved(
+                &path,
+                &imported.sha256,
+            )?)?;
             song.selected = Some(token.clip);
             song.stage = "selected".into();
             Ok(())
@@ -1282,7 +1310,16 @@ mod tests {
         );
         assert_eq!(
             router.clone().oneshot(select()).await.unwrap().status(),
-            StatusCode::SEE_OTHER
+            StatusCode::BAD_REQUEST
+        );
+        // A valid short import can be played, but editing its duration cannot
+        // promote it to a completed song (even after playback validation).
+        let mut spoofed = app.music.load(&song.id).unwrap();
+        spoofed.audio.get_mut(clip).unwrap().duration_seconds = 200.0;
+        app.music.save(&spoofed).unwrap();
+        assert_eq!(
+            router.clone().oneshot(select()).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
         );
         let mut other = normal.clone();
         other.extend_from_slice(&[0; 128]);
@@ -1297,9 +1334,16 @@ mod tests {
         );
         assert_eq!(fs::read(old_path).unwrap(), *broken);
         assert_eq!(fs::read(temp.path().join("synthetic.mp3")).unwrap(), normal);
+        // Old versions could persist a short selected candidate. Reopening
+        // retains its original and ID but returns it to unfinished results.
+        let mut legacy_selected = app.music.load(&song.id).unwrap();
+        legacy_selected.selected = Some(clip.into());
+        legacy_selected.stage = "selected".into();
+        app.music.save(&legacy_selected).unwrap();
         let restarted = App::new(temp.path(), 19531).unwrap();
         let saved = restarted.music.load(&song.id).unwrap();
-        assert_eq!(saved.selected.as_deref(), Some(clip));
+        assert!(saved.selected.is_none());
+        assert_eq!(saved.stage, "results");
         assert_eq!(
             fs::read(
                 restarted
@@ -1330,7 +1374,7 @@ mod tests {
                 "-f",
                 "lavfi",
                 "-i",
-                "sine=frequency=440:duration=5",
+                "sine=frequency=440:duration=181",
                 "-c:a",
                 "libmp3lame",
                 "-b:a",
