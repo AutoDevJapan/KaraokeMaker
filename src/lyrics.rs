@@ -240,13 +240,19 @@ pub fn to_lrc(cues: &[Cue]) -> String {
     cues.iter()
         .map(|cue| {
             let cs = (cue.seconds * 100.0).round() as u64;
-            format!(
-                "[{:02}:{:02}.{:02}]{}\n",
-                cs / 6000,
-                cs / 100 % 60,
-                cs % 100,
-                cue.text
-            )
+            // Each physical LRC line needs a timestamp, including merged lyrics.
+            cue.text
+                .split('\n')
+                .map(|line| {
+                    format!(
+                        "[{:02}:{:02}.{:02}]{}\n",
+                        cs / 6000,
+                        cs / 100 % 60,
+                        cs % 100,
+                        line
+                    )
+                })
+                .collect::<String>()
         })
         .collect()
 }
@@ -410,6 +416,13 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn merged_multiline_cues_survive_lrc_export() {
+        let cues = parse_lrc("[00:01.25]lead\n[00:01.25]harmony\n[00:03.00]\n").unwrap();
+        let exported = to_lrc(&cues);
+        assert_eq!(parse_lrc(&exported).unwrap(), cues);
+    }
+
     #[test]
     fn lrc_multiple_stamps_offsets_and_duplicates() {
         let cues =
