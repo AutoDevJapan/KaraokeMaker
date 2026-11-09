@@ -200,6 +200,21 @@ pub fn make_ass_words(
                     used = 0.0;
                     lines += 1;
                 }
+                if width > budget {
+                    // A single aligned word can be a whole Japanese phrase. Keep its one
+                    // timing tag and split only the displayed glyph clusters, not the audio.
+                    text.push_str(&format!("{{\\kf{fill}}}"));
+                    for (cluster, width) in glyph_clusters(&word.text) {
+                        if used + width > budget && used > 0.0 {
+                            text.push_str("\\N");
+                            used = 0.0;
+                            lines += 1;
+                        }
+                        text.push_str(&ass_text(&cluster));
+                        used += width;
+                    }
+                    continue;
+                }
                 used += width;
             }
             text.push_str(&format!("{spacing}{{\\kf{fill}}}{}", ass_text(&word.text)));
@@ -617,6 +632,55 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn long_single_word_wraps_without_changing_its_timing() {
+        let mut t = template(0.1, 0.1, 4);
+        let words = vec![crate::alignment::Word {
+            text: "あいうえおかきくけこ".repeat(4),
+            start: 0.1,
+            end: 0.9,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        }];
+        for preset in [VideoPreset::FullHd, VideoPreset::Vertical] {
+            let ass = make_ass_words("曲", &words, 1.0, 1.0, preset, &t.style, Some(&t)).unwrap();
+            let line = ass.lines().find(|l| l.starts_with("Dialogue: 1")).unwrap();
+            assert!(line.contains("\\N"));
+            assert_eq!(line.matches("\\kf80").count(), 1);
+            assert!(line.contains("0:00:00.10,0:00:00.90"));
+            t.max_lines = 1;
+            assert!(make_ass_words("曲", &words, 1.0, 1.0, preset, &t.style, Some(&t)).is_err());
+            t.max_lines = 4;
+        }
+    }
+    #[test]
+    fn convert_preflight_checks_actual_words_instead_of_unused_lrc() {
+        let mut t = template(0.1, 0.1, 1);
+        let mut options = crate::media::Options {
+            lyrics: format!("[00:00.10]{}\n", "あ".repeat(40)),
+            words: (0..4)
+                .map(|i| crate::alignment::Word {
+                    text: "あ".repeat(10),
+                    start: 0.1 + i as f64 * 0.2,
+                    end: 0.3 + i as f64 * 0.2,
+                    confidence: 1.0,
+                    join_previous: false,
+                    line_index: i,
+                })
+                .collect(),
+            project: Some(t.project.clone()),
+            template: Some(t.clone()),
+            ..Default::default()
+        };
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_ok());
+        options.words.truncate(1);
+        options.words[0].text = "あ".repeat(40);
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_err());
+        t.max_lines = 4;
+        options.template = Some(t);
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_ok());
+    }
     fn template(horizontal: f64, vertical: f64, max_lines: u8) -> crate::template::Template {
         crate::template::Template {
             version: 1,
