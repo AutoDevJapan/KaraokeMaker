@@ -44,6 +44,11 @@ enum Mode {
         /// JSON with background/accent RGB colors and an installed font name.
         #[arg(long)]
         style: Option<PathBuf>,
+        /// Saved project template JSON; requires --project.
+        #[arg(long, requires = "project")]
+        template: Option<PathBuf>,
+        #[arg(long)]
+        project: Option<String>,
         #[arg(long,value_enum,default_value_t=crate::model::SeparationModel::MelBandFp16)]
         separation: crate::model::SeparationModel,
         #[arg(long)]
@@ -64,6 +69,10 @@ enum Mode {
         preset: VideoPreset,
         #[arg(long)]
         style: Option<PathBuf>,
+        #[arg(long, requires = "project")]
+        template: Option<PathBuf>,
+        #[arg(long)]
+        project: Option<String>,
         #[arg(long)]
         background: bool,
         #[arg(long)]
@@ -306,6 +315,8 @@ fn run() -> Result<()> {
             background,
             preset,
             style,
+            template,
+            project,
             separation,
             words,
             no_subtitles,
@@ -324,6 +335,8 @@ fn run() -> Result<()> {
                 original_video: !background,
                 preset,
                 style: read_style(style)?,
+                template: read_template(template, project.as_deref())?,
+                project,
                 separation,
                 sample_rate: 48000,
                 words: words
@@ -348,6 +361,8 @@ fn run() -> Result<()> {
             lyrics,
             preset,
             style,
+            template,
+            project,
             background,
             words,
         } => {
@@ -357,6 +372,8 @@ fn run() -> Result<()> {
                 original_video: !background,
                 preset,
                 style: read_style(style)?,
+                template: read_template(template, project.as_deref())?,
+                project,
                 words: words
                     .map(|p| -> Result<_> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
                     .transpose()?
@@ -435,6 +452,14 @@ fn run() -> Result<()> {
     }
     Ok(())
 }
+fn read_template(
+    path: Option<PathBuf>,
+    project: Option<&str>,
+) -> Result<Option<crate::template::Template>> {
+    path.map(|path| crate::template::Template::load(&path, project.unwrap_or_default()))
+        .transpose()
+}
+
 fn read_style(path: Option<PathBuf>) -> Result<VisualStyle> {
     let style = path
         .map(|p| -> Result<VisualStyle> { Ok(serde_json::from_slice(&fs::read(p)?)?) })

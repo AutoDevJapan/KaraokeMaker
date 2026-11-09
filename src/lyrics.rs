@@ -132,6 +132,7 @@ pub fn make_ass_words(
     tempo: f64,
     preset: VideoPreset,
     style: &VisualStyle,
+    template: Option<&crate::template::Template>,
 ) -> Result<String> {
     ensure!(
         !words.is_empty() && words.len() <= 10000,
@@ -150,7 +151,7 @@ pub fn make_ass_words(
         );
         previous = word.start;
     }
-    let mut ass = make_ass_styled(title, &[], duration, tempo, preset, style)?;
+    let mut ass = ass_with_layout(title, &[], duration, tempo, preset, style, template)?;
     let mut first = 0;
     while first < words.len() {
         let mut last = first + 1;
@@ -257,6 +258,26 @@ pub fn to_lrc(cues: &[Cue]) -> String {
         .collect()
 }
 
+/// Break text into lines whose estimated width (full-width glyph = 1, ASCII = 0.6) fits the budget.
+fn wrap_to_width(text: &str, budget: f64) -> Vec<String> {
+    let mut lines = Vec::new();
+    for line in text.split('\n') {
+        let mut current = String::new();
+        let mut used = 0.0;
+        for ch in line.chars() {
+            let width = if ch.is_ascii() { 0.6 } else { 1.0 };
+            if used + width > budget && !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                used = 0.0;
+            }
+            current.push(ch);
+            used += width;
+        }
+        lines.push(current);
+    }
+    lines
+}
+
 pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
     make_ass_styled(
         title,
@@ -359,34 +380,40 @@ fn ass_with_layout(
     let font = &style.font;
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
-    if let Some(template) = template {
-        // CJK glyphs are about one font size wide, so this is a safe upper bound.
-        let per_line = (width.saturating_sub(left + right) / lyric_size).max(1) as usize;
+    let title_size = scaled(28.0);
+    // With a template, lines are broken here by estimated glyph width (10% headroom) and
+    // libass automatic wrapping is turned off, because its Japanese wrapping can exceed
+    // the margins. Word-timed subtitles keep libass wrapping.
+    let fixed_wrap = template.is_some() && !cues.is_empty();
+    let wrap_style = if fixed_wrap { 2 } else { 0 };
+    let available = width.saturating_sub(left + right) as f64;
+    let wrapped = |text: &str, size: u32| -> Vec<String> {
+        if fixed_wrap {
+            wrap_to_width(text, available / (size as f64 * 1.1))
+        } else {
+            vec![text.to_string()]
+        }
+    };
+    if let (Some(template), true) = (template, fixed_wrap) {
         for cue in cues {
-            let lines: usize = cue
-                .text
-                .split('\n')
-                .map(|line| line.chars().count().div_ceil(per_line).max(1))
-                .sum();
             ensure!(
-                lines <= template.max_lines as usize,
+                wrapped(&cue.text, lyric_size).len() <= template.max_lines as usize,
                 "字幕が{}行を超えます。余白か行数を調整してください。",
                 template.max_lines
             );
         }
     }
-    let title_size = scaled(28.0);
     let outline = scaled(3.0);
     let title_outline = scaled(2.0);
     let shadow = scaled(1.0);
     // libass rasterizes the vector glyphs after scaling the video to the target size.
     let mut ass = format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{left},{right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: {wrap_style}\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{left},{right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     );
     ass.push_str(&format!(
         "Dialogue: 0,0:00:00.00,{},Title,,0,0,0,,{}\n",
         stamp(duration / tempo),
-        ass_text(title)
+        ass_text(&wrapped(title, title_size).join("\n"))
     ));
     for (index, cue) in cues.iter().enumerate() {
         let end = cues
@@ -401,7 +428,7 @@ fn ass_with_layout(
             "Dialogue: 1,{},{},Lyrics,,0,0,0,,{{\\kf{fill}}}{}\n",
             stamp(cue.seconds / tempo),
             stamp(end / tempo),
-            ass_text(&cue.text)
+            ass_text(&wrapped(&cue.text, lyric_size).join("\n"))
         ));
     }
     Ok(ass)

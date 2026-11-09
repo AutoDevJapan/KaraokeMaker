@@ -131,6 +131,155 @@ fn word_timing_burns_visible_subtitles_and_exports_48khz_audio() {
     );
 }
 
+fn solid_png(path: &std::path::Path, size: &str, color: &str) {
+    let status = media::hidden_command(Tools::discover().ffmpeg)
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!("color=c={color}:s={size}"))
+        .args(["-frames:v", "1"])
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientations() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    // Self-made flat fixtures: a blue background and a red logo.
+    let background = temp.path().join("background.png");
+    let logo = temp.path().join("logo.png");
+    solid_png(&background, "1280x720", "0x203060");
+    solid_png(&logo, "200x200", "0xc02020");
+    let template = |lines: u8| Template {
+        version: 1,
+        project: "客先A".into(),
+        style: Default::default(),
+        background_image: Some(background.clone()),
+        logo: Some(logo.clone()),
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: lines,
+    };
+    let options = |preset, template| Options {
+        title: "テンプレート".into(),
+        preset,
+        lyrics:
+            "[00:00.20]吾輩は猫である名前はまだ無いどこで生れたかとんと見当がつかぬ\n[00:01.80]\n"
+                .into(),
+        template: Some(template),
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    for (preset, width, height, margins) in [
+        // left, right, top, bottom in pixels, from the saved margin and the platform safe area.
+        (
+            VideoPreset::FullHd,
+            1920usize,
+            1080usize,
+            [192usize, 192, 108, 120],
+        ),
+        (VideoPreset::Vertical, 1080, 1920, [108, 160, 192, 320]),
+    ] {
+        let output = temp.path().join(format!("{width}"));
+        fs::create_dir(&output).unwrap();
+        media::render(
+            &source,
+            &output,
+            &options(preset, template(2)),
+            &Progress::default(),
+        )
+        .unwrap();
+        let frame = media::hidden_command(Tools::discover().ffmpeg)
+            .args(["-v", "error", "-ss", "0.8", "-i"])
+            .arg(output.join("karaoke.mp4"))
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(frame.status.success());
+        assert_eq!(frame.stdout.len(), width * height * 3);
+        let bright = |x: usize, y: usize| {
+            let at = (y * width + x) * 3;
+            frame.stdout[at..at + 3].iter().all(|&v| v > 200)
+        };
+        let [left, right, top, bottom] = margins;
+        let mut inside = 0;
+        let mut outside = 0;
+        let mut spots = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                if !bright(x, y) {
+                    continue;
+                }
+                if x + 4 < left || x > width - right + 4 || y + 4 < top || y > height - bottom + 4 {
+                    outside += 1;
+                    spots.push((x, y));
+                } else {
+                    inside += 1;
+                }
+            }
+        }
+        assert!(
+            inside > 2000,
+            "{width}: subtitle text is missing ({inside})"
+        );
+        assert_eq!(
+            outside,
+            0,
+            "{width}: bright pixels outside the saved margins x {:?}..{:?} y {:?}..{:?}",
+            spots.iter().map(|s| s.0).min(),
+            spots.iter().map(|s| s.0).max(),
+            spots.iter().map(|s| s.1).min(),
+            spots.iter().map(|s| s.1).max()
+        );
+        // The flat background image and the logo are really in the frame.
+        let pixel = |x: usize, y: usize| {
+            let at = (y * width + x) * 3;
+            [frame.stdout[at], frame.stdout[at + 1], frame.stdout[at + 2]]
+        };
+        assert!(
+            pixel(width / 10, height / 2)[2] > pixel(width / 10, height / 2)[0] + 40,
+            "{width}: background image"
+        );
+        let logo_pixel = pixel(
+            width - (height as f64 * 0.04) as usize - 8,
+            (height as f64 * 0.04) as usize + 8,
+        );
+        assert!(
+            logo_pixel[0] > 150 && logo_pixel[1] < 80,
+            "{width}: logo {logo_pixel:?}"
+        );
+    }
+    // One line is not enough for this lyric, and another project's template is refused.
+    let refused = temp.path().join("refused");
+    fs::create_dir(&refused).unwrap();
+    assert!(
+        media::render(
+            &source,
+            &refused,
+            &options(VideoPreset::FullHd, template(1)),
+            &Progress::default()
+        )
+        .is_err()
+    );
+    let mut other = options(VideoPreset::FullHd, template(2));
+    other.project = Some("別の客先".into());
+    assert!(media::render(&source, &refused, &other, &Progress::default()).is_err());
+}
+
 #[test]
 fn loud_audio_keeps_headroom_after_wav_mp3_and_aac_export() {
     let temp = tempfile::tempdir().unwrap();

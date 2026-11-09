@@ -32,6 +32,12 @@ pub struct Options {
     pub words: Vec<crate::alignment::Word>,
     #[serde(default)]
     pub automatic_subtitles: bool,
+    /// Saved project layout (margins, line limit, background image and logo).
+    #[serde(default)]
+    pub template: Option<crate::template::Template>,
+    /// The project that owns the template; a template of another project is rejected.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 fn legacy_sample_rate() -> u32 {
     44100
@@ -53,6 +59,8 @@ impl Default for Options {
             sample_rate: 48000,
             words: Vec::new(),
             automatic_subtitles: true,
+            template: None,
+            project: None,
         }
     }
 }
@@ -78,6 +86,10 @@ impl Options {
             lyrics::parse_lrc(&self.lyrics)?;
         }
         self.style.validate()?;
+        if let Some(template) = &self.template {
+            let project = self.project.as_deref().unwrap_or_default();
+            template.validate(project)?;
+        }
         ensure!(
             [44100, 48000].contains(&self.sample_rate),
             "音声は44.1kHzまたは48kHzにしてください。"
@@ -422,14 +434,24 @@ pub fn export(
     if !options.words.is_empty() {
         cues.retain(|cue| cue.seconds < duration);
     }
-    let ass = lyrics::make_ass_styled(
-        &options.title,
-        &cues,
-        duration,
-        options.tempo,
-        options.preset,
-        &options.style,
-    )?;
+    let ass = match &options.template {
+        Some(template) => lyrics::make_ass_templated(
+            &options.title,
+            &cues,
+            duration,
+            options.tempo,
+            options.preset,
+            template,
+        )?,
+        None => lyrics::make_ass_styled(
+            &options.title,
+            &cues,
+            duration,
+            options.tempo,
+            options.preset,
+            &options.style,
+        )?,
+    };
     let ass = if options.words.is_empty() {
         ass
     } else {
@@ -439,7 +461,11 @@ pub fn export(
             duration,
             options.tempo,
             options.preset,
-            &options.style,
+            options
+                .template
+                .as_ref()
+                .map_or(&options.style, |t| &t.style),
+            options.template.as_ref(),
         )?
     };
     fs::write(dir.join("lyrics.ass"), ass)?;
@@ -503,13 +529,32 @@ pub fn export(
     let mut args = Vec::<String>::new();
     let (width, height) = options.preset.dimensions();
     let (crf, maxrate, bufsize) = options.preset.encoding();
-    let background = &options.style.background;
+    let style = options
+        .template
+        .as_ref()
+        .map_or(&options.style, |t| &t.style);
+    let background = &style.background;
+    let template_image = options
+        .template
+        .as_ref()
+        .and_then(|t| t.background_image.as_ref())
+        .filter(|_| !(source.video && options.original_video));
+    let logo = options.template.as_ref().and_then(|t| t.logo.as_ref());
     if source.video && options.original_video {
         args.extend([
             "-protocol_whitelist".into(),
             "file,pipe".into(),
             "-i".into(),
             input.display().to_string(),
+        ]);
+    } else if let Some(image) = template_image {
+        args.extend([
+            "-loop".into(),
+            "1".into(),
+            "-framerate".into(),
+            "30".into(),
+            "-i".into(),
+            image.display().to_string(),
         ]);
     } else {
         args.extend([
@@ -524,17 +569,55 @@ pub fn export(
     } else {
         "0:v:0".into()
     };
+    args.extend(["-i".into(), "karaoke.wav".into()]);
+    let base = format!(
+        "setpts=PTS/{},scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{background},setsar=1,tpad=stop_mode=clone:stop_duration=1800",
+        options.tempo
+    );
+    if let Some(logo) = logo {
+        // The logo sits in the top-right corner inside the safe margin; subtitles are drawn last.
+        let margin = (height as f64 * 0.04).round() as u32;
+        let logo_height = (height as f64 * 0.1).round() as u32;
+        args.extend(["-i".into(), logo.display().to_string()]);
+        args.extend([
+            "-filter_complex".into(),
+            format!("[{video_map}]{base}[bg];[2:v]scale=-2:{logo_height},format=rgba[logo];[bg][logo]overlay=W-w-{margin}:{margin},ass=lyrics.ass[v]"),
+            "-map".into(), "[v]".into(),
+        ]);
+    } else {
+        args.extend([
+            "-map".into(),
+            video_map,
+            "-vf".into(),
+            format!("{base},ass=lyrics.ass"),
+        ]);
+    }
     args.extend([
-        "-i".into(), "karaoke.wav".into(), "-map".into(), video_map,
-        "-map".into(), "1:a:0".into(), "-vf".into(),
-        format!("setpts=PTS/{},scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{background},setsar=1,tpad=stop_mode=clone:stop_duration=1800,ass=lyrics.ass",options.tempo),
-        "-c:v".into(), "libx264".into(), "-preset".into(), "fast".into(),
-        "-crf".into(), crf.to_string(), "-maxrate".into(), maxrate.into(),
-        "-bufsize".into(), bufsize.into(), "-pix_fmt".into(), "yuv420p".into(),
-        "-r".into(), "30".into(),
-        "-c:a".into(), "aac".into(), "-b:a".into(), "384k".into(),
-        "-t".into(), format!("{:.6}",duration/options.tempo),
-        "-movflags".into(), "+faststart".into(), "karaoke.mp4".into()
+        "-map".into(),
+        "1:a:0".into(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-preset".into(),
+        "fast".into(),
+        "-crf".into(),
+        crf.to_string(),
+        "-maxrate".into(),
+        maxrate.into(),
+        "-bufsize".into(),
+        bufsize.into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
+        "-r".into(),
+        "30".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        "384k".into(),
+        "-t".into(),
+        format!("{:.6}", duration / options.tempo),
+        "-movflags".into(),
+        "+faststart".into(),
+        "karaoke.mp4".into(),
     ]);
     run(tools, dir, &args, progress)?;
     for name in ["karaoke.mp3", "karaoke.mp4"] {
