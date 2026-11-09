@@ -385,6 +385,11 @@ fn run() -> Result<()> {
                     .unwrap_or_default(),
                 automatic_subtitles: !no_subtitles,
             };
+            if options.template.is_some() {
+                eprintln!(
+                    "字幕の幅と配置を計測します。初回は歌詞の量により数分かかることがあります。"
+                );
+            }
             media::convert(
                 &input,
                 &dir,
@@ -424,6 +429,11 @@ fn run() -> Result<()> {
             fs::create_dir_all(&output)?;
             let dir = output.join(uuid::Uuid::new_v4().to_string());
             fs::create_dir(&dir)?;
+            if options.template.is_some() {
+                eprintln!(
+                    "字幕の幅と配置を計測します。初回は歌詞の量により数分かかることがあります。"
+                );
+            }
             media::render(&input, &dir, &options, &Progress::default())?;
             println!("{}", dir.canonicalize()?.display());
         }
