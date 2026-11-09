@@ -312,20 +312,23 @@ mod timing_tests {
     }
     #[test]
     fn restored_history_validates_every_undo_position() {
-        let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
-        for index in 0..3 {
-            draft
-                .replace(vec![line(1.0, 2.0, &format!("state-{index}"))])
-                .unwrap();
-        }
-        let json = draft.to_json().unwrap();
-        for index in 0..3 {
-            let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-            value["undo"][index][0]["end"] = serde_json::json!(0.5);
-            assert!(
-                TimingDraft::from_json(&value.to_string(), 5.0).is_err(),
-                "undo {index}"
-            );
+        for count in [3, 100] {
+            let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+            for index in 0..count {
+                draft
+                    .replace(vec![line(1.0, 2.0, &format!("state-{index}"))])
+                    .unwrap();
+            }
+            let json = draft.to_json().unwrap();
+            assert!(TimingDraft::from_json(&json, 5.0).is_ok());
+            for index in 0..count {
+                let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+                value["undo"][index][0]["end"] = serde_json::json!(0.5);
+                assert!(
+                    TimingDraft::from_json(&value.to_string(), 5.0).is_err(),
+                    "undo {index} of {count}"
+                );
+            }
         }
     }
     #[test]
