@@ -1,0 +1,929 @@
+[
+  {
+    "source": "https://github.com/brendanzab/gl-rs/blob/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
+    "version": "0.14.0",
+    "file": "LICENSE",
+    "crate": "gl_generator",
+    "revision": "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "source": "https://github.com/brendanzab/gl-rs/blob/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE",
+    "version": "3.1.0",
+    "file": "LICENSE",
+    "crate": "khronos_api",
+    "revision": "f150967b1c44ae888e6676f93f639ebc82771bdc",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "source": "crates.io package",
+    "version": "1.0.23",
+    "file": "LICENSE-APACHE",
+    "crate": "ryu",
+    "revision": "f0b52bb194befe6fd242154f2182fafd43a819b8",
+    "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+  },
+  {
+    "source": "crates.io package",
+    "version": "1.0.23",
+    "file": "LICENSE-BOOST",
+    "crate": "ryu",
+    "revision": "f0b52bb194befe6fd242154f2182fafd43a819b8",
+    "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+  },
+  {
+    "source": "https://github.com/gfx-rs/rspirv/blob/e91a5debc10c395b36db7721dfff6326d697a1e2/LICENSE",
+    "version": "0.3.0+sdk-1.3.268.0",
+    "file": "LICENSE",
+    "crate": "spirv",
+    "revision": "e91a5debc10c395b36db7721dfff6326d697a1e2",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "source": "crates.io package",
+    "version": "1.0.2",
+    "file": "LICENSE",
+    "crate": "sync_wrapper",
+    "revision": "55413956c36aeab47feb8c04d1b7a044d6df336a",
+    "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+  },
+  {
+    "source": "https://github.com/gfx-rs/rspirv/blob/1cb9be8cdb82f412475d703865acfcb85f645508/LICENSE",
+    "version": "0.12.1+sdk-1.4.341.0",
+    "file": "LICENSE",
+    "crate": "tracel-rspirv",
+    "revision": "1cb9be8cdb82f412475d703865acfcb85f645508",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "source": "https://github.com/immunant/c2rust/blob/3e0183e4d56f9d4d003f1ea2e9a814648debf307/LICENSE",
+    "version": "0.20.0",
+    "file": "LICENSE",
+    "crate": "c2rust-bitfields-derive",
+    "revision": "3e0183e4d56f9d4d003f1ea2e9a814648debf307",
+    "sha256": "2bd73a6df34e41c531e4088a97e90a489b163926fb214ac90e9c172d124bc2f8"
+  },
+  {
+    "source": "https://github.com/immunant/c2rust/blob/3e0183e4d56f9d4d003f1ea2e9a814648debf307/LICENSE",
+    "version": "0.20.0",
+    "file": "LICENSE",
+    "crate": "c2rust-bitfields",
+    "revision": "3e0183e4d56f9d4d003f1ea2e9a814648debf307",
+    "sha256": "2bd73a6df34e41c531e4088a97e90a489b163926fb214ac90e9c172d124bc2f8"
+  },
+  {
+    "source": "crates.io package",
+    "version": "2.0.2",
+    "file": "LICENSE",
+    "crate": "tiny-keccak",
+    "revision": "f034411460d0012925052017c1658b3ce9cda532",
+    "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-APACHE",
+    "version": "0.20.1",
+    "file": "LICENSE-APACHE",
+    "crate": "burn-backend",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "a9cfa8a88b2c2b7c9a5f2ef159522b706ea8aaa76448438d98c89c3217e90378"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-MIT",
+    "version": "0.20.1",
+    "file": "LICENSE-MIT",
+    "crate": "burn-backend",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "ef31f0b689aa7e2edb5883c7617361de37b05030389e876d91be6c2f2306bb35"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/NOTICES.md",
+    "version": "0.20.1",
+    "file": "NOTICES.md",
+    "crate": "burn-backend",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "b05fefdb9242269cf3cc95cfd44edf7fd6c6a5bff8249abe40073540737dfdbb"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-APACHE",
+    "version": "0.20.1",
+    "file": "LICENSE-APACHE",
+    "crate": "burn-cubecl-fusion",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "a9cfa8a88b2c2b7c9a5f2ef159522b706ea8aaa76448438d98c89c3217e90378"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-MIT",
+    "version": "0.20.1",
+    "file": "LICENSE-MIT",
+    "crate": "burn-cubecl-fusion",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "ef31f0b689aa7e2edb5883c7617361de37b05030389e876d91be6c2f2306bb35"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/NOTICES.md",
+    "version": "0.20.1",
+    "file": "NOTICES.md",
+    "crate": "burn-cubecl-fusion",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "b05fefdb9242269cf3cc95cfd44edf7fd6c6a5bff8249abe40073540737dfdbb"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-APACHE",
+    "version": "0.20.1",
+    "file": "LICENSE-APACHE",
+    "crate": "burn-ir",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "a9cfa8a88b2c2b7c9a5f2ef159522b706ea8aaa76448438d98c89c3217e90378"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-MIT",
+    "version": "0.20.1",
+    "file": "LICENSE-MIT",
+    "crate": "burn-ir",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "ef31f0b689aa7e2edb5883c7617361de37b05030389e876d91be6c2f2306bb35"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/NOTICES.md",
+    "version": "0.20.1",
+    "file": "NOTICES.md",
+    "crate": "burn-ir",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "b05fefdb9242269cf3cc95cfd44edf7fd6c6a5bff8249abe40073540737dfdbb"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-APACHE",
+    "version": "0.20.1",
+    "file": "LICENSE-APACHE",
+    "crate": "burn-nn",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "a9cfa8a88b2c2b7c9a5f2ef159522b706ea8aaa76448438d98c89c3217e90378"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-MIT",
+    "version": "0.20.1",
+    "file": "LICENSE-MIT",
+    "crate": "burn-nn",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "ef31f0b689aa7e2edb5883c7617361de37b05030389e876d91be6c2f2306bb35"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/NOTICES.md",
+    "version": "0.20.1",
+    "file": "NOTICES.md",
+    "crate": "burn-nn",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "b05fefdb9242269cf3cc95cfd44edf7fd6c6a5bff8249abe40073540737dfdbb"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-APACHE",
+    "version": "0.20.1",
+    "file": "LICENSE-APACHE",
+    "crate": "burn-optim",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "a9cfa8a88b2c2b7c9a5f2ef159522b706ea8aaa76448438d98c89c3217e90378"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/LICENSE-MIT",
+    "version": "0.20.1",
+    "file": "LICENSE-MIT",
+    "crate": "burn-optim",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "ef31f0b689aa7e2edb5883c7617361de37b05030389e876d91be6c2f2306bb35"
+  },
+  {
+    "source": "https://github.com/tracel-ai/burn/blob/75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4/NOTICES.md",
+    "version": "0.20.1",
+    "file": "NOTICES.md",
+    "crate": "burn-optim",
+    "revision": "75b7881397df1f21e5c2bf51cd3aa6b9ae2bb6a4",
+    "sha256": "b05fefdb9242269cf3cc95cfd44edf7fd6c6a5bff8249abe40073540737dfdbb"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
+    "version": "0.9.0",
+    "file": "LICENSE-APACHE",
+    "crate": "cubecl-ir",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930",
+    "original_reference": "../../LICENSE-APACHE",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
+    "version": "0.9.0",
+    "file": "LICENSE-MIT",
+    "crate": "cubecl-ir",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4",
+    "original_reference": "../../LICENSE-MIT",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
+    "version": "0.9.0",
+    "file": "LICENSE-APACHE",
+    "crate": "cubecl-macros-internal",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930",
+    "original_reference": "../../LICENSE-APACHE",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
+    "version": "0.9.0",
+    "file": "LICENSE-MIT",
+    "crate": "cubecl-macros-internal",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4",
+    "original_reference": "../../LICENSE-MIT",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
+    "version": "0.9.0",
+    "file": "LICENSE-APACHE",
+    "crate": "cubecl-macros",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930",
+    "original_reference": "../../LICENSE-APACHE",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
+    "version": "0.9.0",
+    "file": "LICENSE-MIT",
+    "crate": "cubecl-macros",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4",
+    "original_reference": "../../LICENSE-MIT",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
+    "version": "0.9.0",
+    "file": "LICENSE-APACHE",
+    "crate": "cubecl-opt",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
+    "version": "0.9.0",
+    "file": "LICENSE-MIT",
+    "crate": "cubecl-opt",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/NOTICE.md",
+    "version": "0.9.0",
+    "file": "NOTICE.md",
+    "crate": "cubecl-opt",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "70a9ae1dc17b8efb603c3fdb5f7798041a5450754f524ee6c57c764e18427b13"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
+    "version": "0.9.0",
+    "file": "LICENSE-APACHE",
+    "crate": "cubecl-spirv",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
+    "version": "0.9.0",
+    "file": "LICENSE-MIT",
+    "crate": "cubecl-spirv",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/NOTICE.md",
+    "version": "0.9.0",
+    "file": "NOTICE.md",
+    "crate": "cubecl-spirv",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "70a9ae1dc17b8efb603c3fdb5f7798041a5450754f524ee6c57c764e18427b13"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
+    "version": "0.9.0",
+    "file": "LICENSE-APACHE",
+    "crate": "cubecl-std",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
+    "version": "0.9.0",
+    "file": "LICENSE-MIT",
+    "crate": "cubecl-std",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/NOTICE.md",
+    "version": "0.9.0",
+    "file": "NOTICE.md",
+    "crate": "cubecl-std",
+    "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
+    "sha256": "70a9ae1dc17b8efb603c3fdb5f7798041a5450754f524ee6c57c764e18427b13"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-APACHE",
+    "version": "0.1.1",
+    "file": "LICENSE-APACHE",
+    "crate": "cubek-attention",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-MIT",
+    "version": "0.1.1",
+    "file": "LICENSE-MIT",
+    "crate": "cubek-attention",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-APACHE",
+    "version": "0.1.1",
+    "file": "LICENSE-APACHE",
+    "crate": "cubek-convolution",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-MIT",
+    "version": "0.1.1",
+    "file": "LICENSE-MIT",
+    "crate": "cubek-convolution",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-APACHE",
+    "version": "0.1.1",
+    "file": "LICENSE-APACHE",
+    "crate": "cubek-matmul",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-MIT",
+    "version": "0.1.1",
+    "file": "LICENSE-MIT",
+    "crate": "cubek-matmul",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-APACHE",
+    "version": "0.1.1",
+    "file": "LICENSE-APACHE",
+    "crate": "cubek-quant",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-MIT",
+    "version": "0.1.1",
+    "file": "LICENSE-MIT",
+    "crate": "cubek-quant",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-APACHE",
+    "version": "0.1.1",
+    "file": "LICENSE-APACHE",
+    "crate": "cubek-random",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-MIT",
+    "version": "0.1.1",
+    "file": "LICENSE-MIT",
+    "crate": "cubek-random",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-APACHE",
+    "version": "0.1.1",
+    "file": "LICENSE-APACHE",
+    "crate": "cubek-reduce",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-MIT",
+    "version": "0.1.1",
+    "file": "LICENSE-MIT",
+    "crate": "cubek-reduce",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-APACHE",
+    "version": "0.1.1",
+    "file": "LICENSE-APACHE",
+    "crate": "cubek",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+  },
+  {
+    "source": "https://github.com/tracel-ai/cubek/blob/44ef6a37f700b8ee3fc152b974b2a0413a7317ac/LICENSE-MIT",
+    "version": "0.1.1",
+    "file": "LICENSE-MIT",
+    "crate": "cubek",
+    "revision": "44ef6a37f700b8ee3fc152b974b2a0413a7317ac",
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+  },
+  {
+    "source": "https://github.com/embassy-rs/embassy/blob/3e8d8fec15286eb25b8bba7d103c8fc279544551/LICENSE-APACHE",
+    "version": "0.1.2",
+    "file": "LICENSE-APACHE",
+    "crate": "embassy-futures",
+    "revision": "3e8d8fec15286eb25b8bba7d103c8fc279544551",
+    "sha256": "64853d2f346cf20ad5a133c441e792d4b99b45adb2ef3acfa2b890d713e4ed0b"
+  },
+  {
+    "source": "https://github.com/embassy-rs/embassy/blob/3e8d8fec15286eb25b8bba7d103c8fc279544551/LICENSE-CC-BY-SA",
+    "version": "0.1.2",
+    "file": "LICENSE-CC-BY-SA",
+    "crate": "embassy-futures",
+    "revision": "3e8d8fec15286eb25b8bba7d103c8fc279544551",
+    "sha256": "3b2890eacd851373001c4a14623458e3adaf1b1967939aa9c38a318e28d61c00"
+  },
+  {
+    "source": "https://github.com/embassy-rs/embassy/blob/3e8d8fec15286eb25b8bba7d103c8fc279544551/LICENSE-MIT",
+    "version": "0.1.2",
+    "file": "LICENSE-MIT",
+    "crate": "embassy-futures",
+    "revision": "3e8d8fec15286eb25b8bba7d103c8fc279544551",
+    "sha256": "83d04e56c5beb631d65d6bd7b78c9350083084acc19753a3e6e1b68806a607f5"
+  },
+  {
+    "source": "https://github.com/embassy-rs/embassy/blob/3e8d8fec15286eb25b8bba7d103c8fc279544551/NOTICE.md",
+    "version": "0.1.2",
+    "file": "NOTICE.md",
+    "crate": "embassy-futures",
+    "revision": "3e8d8fec15286eb25b8bba7d103c8fc279544551",
+    "sha256": "0c7c2f899dcb2a16feee661a02ea253e382c0a55e9004c9d98b28c96513d4b99"
+  },
+  {
+    "source": "https://github.com/zakarumych/gpu-alloc/blob/7ddd1fe576fcfc503347eb97e476a47581479f22/COPYING",
+    "version": "0.3.1",
+    "file": "COPYING",
+    "crate": "gpu-alloc-types",
+    "revision": "7ddd1fe576fcfc503347eb97e476a47581479f22",
+    "sha256": "12121dfa588677007848ab922a45a1e3248868f6ff063598fceb3141d7897314"
+  },
+  {
+    "source": "https://github.com/zakarumych/gpu-alloc/blob/61020bdcb4eb04fca6bbf748aeb9570e859236e0/COPYING",
+    "version": "0.6.2",
+    "file": "COPYING",
+    "crate": "gpu-alloc",
+    "revision": "61020bdcb4eb04fca6bbf748aeb9570e859236e0",
+    "sha256": "12121dfa588677007848ab922a45a1e3248868f6ff063598fceb3141d7897314"
+  },
+  {
+    "source": "https://github.com/zakarumych/gpu-descriptor/blob/9f2fb9546591322e7b77ee1e79385e01effd85e4/COPYING",
+    "version": "0.2.0",
+    "file": "COPYING",
+    "crate": "gpu-descriptor-types",
+    "revision": "9f2fb9546591322e7b77ee1e79385e01effd85e4",
+    "sha256": "f72143f7e9d9fb8bd336b139fa22f825a299591c29f2f7338c5566347b137613"
+  },
+  {
+    "source": "https://github.com/zakarumych/gpu-descriptor/blob/bb28b4e55b742e0ea3e7a0968e7ee6287ba0e06a/COPYING",
+    "version": "0.3.2",
+    "file": "COPYING",
+    "crate": "gpu-descriptor",
+    "revision": "bb28b4e55b742e0ea3e7a0968e7ee6287ba0e06a",
+    "sha256": "f72143f7e9d9fb8bd336b139fa22f825a299591c29f2f7338c5566347b137613"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.2.16",
+    "file": "LICENSE.txt",
+    "crate": "libm",
+    "revision": "dfd2203a4d6110820ad7bb65cafe1bf331a03a3d",
+    "sha256": "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+  },
+  {
+    "source": "https://github.com/wingertge/macerator/blob/74ff68d11f164d3da077d673a0c0747e71f0c085/LICENSE",
+    "version": "0.1.5",
+    "file": "LICENSE",
+    "crate": "macerator-macros",
+    "revision": "74ff68d11f164d3da077d673a0c0747e71f0c085",
+    "sha256": "5c04b92aec59ceb545aee96042c8258f004d98316cdb173171bb2b34d11b51ef"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.8.1",
+    "file": "LICENSE.md",
+    "crate": "md5",
+    "revision": "e1ad96d3b6eda6a6e51e524e994d01d77fe412a2",
+    "sha256": "2096783a9b939ae2a3a4789d9696740cec1a72ac04ccf8a7972d436fd0e7b240"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE",
+    "version": "26.0.0",
+    "file": "LICENSE.APACHE",
+    "crate": "naga",
+    "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT",
+    "version": "26.0.0",
+    "file": "LICENSE.MIT",
+    "crate": "naga",
+    "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
+  },
+  {
+    "source": "https://github.com/aclysma/profiling/blob/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+    "version": "1.0.18",
+    "file": "LICENSE-APACHE",
+    "crate": "profiling",
+    "revision": "8271551172eb6fa4cba47369aedd93790c623df9",
+    "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"
+  },
+  {
+    "source": "https://github.com/aclysma/profiling/blob/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+    "version": "1.0.18",
+    "file": "LICENSE-MIT",
+    "crate": "profiling",
+    "revision": "8271551172eb6fa4cba47369aedd93790c623df9",
+    "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+  },
+  {
+    "source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-APACHE",
+    "version": "0.38.0+1.3.296",
+    "file": "LICENSE-APACHE",
+    "crate": "tracel-ash",
+    "revision": "1f2b476be67ed12f3cb61ef96c54c4aa4de14814",
+    "sha256": "0e8a410375e1ee5c75c6198b08b534fec6e5edef766cf971bab4a404542636ab",
+    "original_reference": "../LICENSE-APACHE",
+    "resolved_source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-APACHE"
+  },
+  {
+    "source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-MIT",
+    "version": "0.38.0+1.3.296",
+    "file": "LICENSE-MIT",
+    "crate": "tracel-ash",
+    "revision": "1f2b476be67ed12f3cb61ef96c54c4aa4de14814",
+    "sha256": "c733ccf8ab25df175a63d9d844677b98e3a5ab8f8de1c1616087e6868a7f948e",
+    "original_reference": "../LICENSE-MIT",
+    "resolved_source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-MIT"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.5.1",
+    "file": "LICENSE-APACHE",
+    "crate": "type-map",
+    "revision": "d3ab3e642736d87f3fa8b1e6c8f13a93fcfb72e1",
+    "sha256": "00fb0b04768f258499afeafd0ed3f84fe24ca28921641741c08ca5750a31adfe"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.5.1",
+    "file": "LICENSE-MIT",
+    "crate": "type-map",
+    "revision": "d3ab3e642736d87f3fa8b1e6c8f13a93fcfb72e1",
+    "sha256": "6e9587a31f8b4a064ace93efa00c5c8612faccb68da790e728fcb3851973749b"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE",
+    "version": "26.0.0",
+    "file": "LICENSE.APACHE",
+    "crate": "wgpu-core-deps-windows-linux-android",
+    "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT",
+    "version": "26.0.0",
+    "file": "LICENSE.MIT",
+    "crate": "wgpu-core-deps-windows-linux-android",
+    "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE",
+    "version": "26.0.1",
+    "file": "LICENSE.APACHE",
+    "crate": "wgpu-core",
+    "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "original_reference": "../LICENSE.APACHE",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT",
+    "version": "26.0.1",
+    "file": "LICENSE.MIT",
+    "crate": "wgpu-core",
+    "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4",
+    "original_reference": "../LICENSE.MIT",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE",
+    "version": "26.0.0",
+    "file": "LICENSE.APACHE",
+    "crate": "wgpu-types",
+    "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "original_reference": "../LICENSE.APACHE",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT",
+    "version": "26.0.0",
+    "file": "LICENSE.MIT",
+    "crate": "wgpu-types",
+    "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4",
+    "original_reference": "../LICENSE.MIT",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE",
+    "version": "26.0.1",
+    "file": "LICENSE.APACHE",
+    "crate": "wgpu",
+    "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "original_reference": "../LICENSE.APACHE",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE"
+  },
+  {
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT",
+    "version": "26.0.1",
+    "file": "LICENSE.MIT",
+    "crate": "wgpu",
+    "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4",
+    "original_reference": "../LICENSE.MIT",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-apache-2.0",
+    "crate": "windows-core",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-mit",
+    "crate": "windows-core",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-apache-2.0",
+    "crate": "windows-implement",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-mit",
+    "crate": "windows-implement",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-apache-2.0",
+    "crate": "windows-interface",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-mit",
+    "crate": "windows-interface",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.2.1",
+    "file": "license-apache-2.0",
+    "crate": "windows-link",
+    "revision": "d468916ac27a36fb8a12bafc1bf5c0ec2fe92238",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.2.1",
+    "file": "license-mit",
+    "crate": "windows-link",
+    "revision": "d468916ac27a36fb8a12bafc1bf5c0ec2fe92238",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.2.0",
+    "file": "license-apache-2.0",
+    "crate": "windows-result",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.2.0",
+    "file": "license-mit",
+    "crate": "windows-result",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.1.0",
+    "file": "license-apache-2.0",
+    "crate": "windows-strings",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.1.0",
+    "file": "license-mit",
+    "crate": "windows-strings",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.48.0",
+    "file": "license-apache-2.0",
+    "crate": "windows-sys",
+    "revision": "406944152ef28d3273236edc958c2bfbf825775d",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.48.0",
+    "file": "license-mit",
+    "crate": "windows-sys",
+    "revision": "406944152ef28d3273236edc958c2bfbf825775d",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.61.2",
+    "file": "license-apache-2.0",
+    "crate": "windows-sys",
+    "revision": "32c3144490c016fe496a0aed769bce60987a2e9d",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.61.2",
+    "file": "license-mit",
+    "crate": "windows-sys",
+    "revision": "32c3144490c016fe496a0aed769bce60987a2e9d",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.48.5",
+    "file": "license-apache-2.0",
+    "crate": "windows-targets",
+    "revision": "b769fa7570f8eeaede0ed1995a7dbe1e9591a35b",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.48.5",
+    "file": "license-mit",
+    "crate": "windows-targets",
+    "revision": "b769fa7570f8eeaede0ed1995a7dbe1e9591a35b",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.52.6",
+    "file": "license-apache-2.0",
+    "crate": "windows-targets",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.52.6",
+    "file": "license-mit",
+    "crate": "windows-targets",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-apache-2.0",
+    "crate": "windows",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.58.0",
+    "file": "license-mit",
+    "crate": "windows",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.48.5",
+    "file": "license-apache-2.0",
+    "crate": "windows_x86_64_msvc",
+    "revision": "b769fa7570f8eeaede0ed1995a7dbe1e9591a35b",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.48.5",
+    "file": "license-mit",
+    "crate": "windows_x86_64_msvc",
+    "revision": "b769fa7570f8eeaede0ed1995a7dbe1e9591a35b",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.52.6",
+    "file": "license-apache-2.0",
+    "crate": "windows_x86_64_msvc",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+  },
+  {
+    "source": "crates.io package",
+    "version": "0.52.6",
+    "file": "license-mit",
+    "crate": "windows_x86_64_msvc",
+    "revision": "db06b51c2ebb743efb544d40e3064efa49f28d38",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "note": "Fixed package/upstream contains no standalone license file; declaration and author metadata retained without invented copyright",
+    "version": "0.2.1",
+    "file": "Cargo.toml.orig",
+    "revision": "4225763d744183d720f575ae96d04161b4d08ea0",
+    "crate": "hexf-parse",
+    "sha256": "4a56dbdbc12054fd33b7a2634a45cbbe6fe12f5e6f4081002cbfa527f7220c70",
+    "source": "https://github.com/lifthrasiir/hexf/blob/4225763d744183d720f575ae96d04161b4d08ea0/parse/Cargo.toml"
+  },
+  {
+    "note": "Fixed package/upstream contains no standalone license file; declaration and author metadata retained without invented copyright",
+    "version": "3.5.0",
+    "file": "README.md",
+    "revision": "d0d4eee0525fd27c96c8a046d6d107acd5ed84a6",
+    "crate": "realfft",
+    "sha256": "1e92c54e7fa08298d2a34ea9aa63b85626c47519873a91cd1028f234e1221608",
+    "source": "https://github.com/HEnquist/realfft/blob/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6/README.md"
+  },
+  {
+    "note": "Fixed package/upstream contains no standalone license file; declaration and author metadata retained without invented copyright",
+    "version": "3.5.0",
+    "file": "Cargo.toml.orig",
+    "revision": "d0d4eee0525fd27c96c8a046d6d107acd5ed84a6",
+    "crate": "realfft",
+    "sha256": "d72ddbadf9bb55ed21ae973ac97f0bb4e8df2064af628c54b802b2c7d764c8de",
+    "source": "https://github.com/HEnquist/realfft/blob/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6/Cargo.toml"
+  },
+  {
+    "sha256": "25c4576db4a90ddaddaf1b5cd83dc1a537e600041009f6ca71ec62d770ea4390",
+    "file": "LICENSE-TEXT.txt",
+    "crate": "realfft",
+    "source": "Supplemental standard license text; upstream declaration separately retained",
+    "version": "3.5.0",
+    "revision": "standard-text"
+  },
+  {
+    "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "file": "LICENSE-TEXT.txt",
+    "crate": "hexf-parse",
+    "source": "Supplemental standard license text; upstream declaration separately retained",
+    "version": "0.2.1",
+    "revision": "standard-text"
+  }
+]
