@@ -27,7 +27,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --release
+      - name: Assemble and verify Windows package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory dist/KaraokeMaker | Out-Null
+          Copy-Item target/release/karaoke-maker.exe dist/KaraokeMaker/KaraokeMaker.exe
+          Copy-Item target/release/karaoke-maker-cli.exe dist/KaraokeMaker/karaoke-maker-cli.exe
+          Copy-Item README.md,LICENSE dist/KaraokeMaker/
+          Copy-Item docs/dependencies.md dist/KaraokeMaker/DEPENDENCIES.md
+          Copy-Item docs/windows-package.md dist/KaraokeMaker/START-HERE.md
+          New-Item -ItemType Directory dist/KaraokeMaker/third-party/demucs-core | Out-Null
+          Copy-Item vendor/demucs-core/LICENSE,vendor/demucs-core/UPSTREAM.md dist/KaraokeMaker/third-party/demucs-core/
+          Compress-Archive -Path dist/KaraokeMaker -DestinationPath dist/KaraokeMaker-windows.zip
+          Expand-Archive dist/KaraokeMaker-windows.zip dist/verify
+          & ./dist/verify/KaraokeMaker/karaoke-maker-cli.exe --help
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged CLI failed to start' }
+          & ./dist/verify/KaraokeMaker/karaoke-maker-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged CLI version check failed' }
+          Get-FileHash dist/KaraokeMaker-windows.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  KaraokeMaker-windows.zip" } | Set-Content dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: karaoke-maker-windows
-          path: target/release/karaoke-maker.exe
+          if-no-files-found: error
+          path: |
+            dist/KaraokeMaker-windows.zip
+            dist/SHA256SUMS.txt
