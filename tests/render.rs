@@ -5,6 +5,75 @@ use karaoke_maker::{
 use std::fs;
 
 #[test]
+fn cli_template_measurement_notice_is_visible_and_stdout_remains_a_result_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let samples: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+    media::write_stereo(&source, &samples, &samples).unwrap();
+    let lrc = temp.path().join("lyrics.lrc");
+    let template = temp.path().join("template.json");
+    fs::write(
+        &template,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "project": "fixture", "style": {
+                "background": "142e27", "accent": "ceffa4", "font": "Yu Gothic"
+            }, "background_image": null, "logo": null,
+            "horizontal_margin": 0.1, "vertical_margin": 0.1, "max_lines": 1
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let run = || {
+        media::hidden_command(env!("CARGO_BIN_EXE_karaoke-maker-cli"))
+            .arg("--data")
+            .arg(temp.path().join("data"))
+            .arg("render")
+            .arg(&source)
+            .arg("--output")
+            .arg(temp.path().join("out"))
+            .arg("--lyrics")
+            .arg(&lrc)
+            .arg("--template")
+            .arg(&template)
+            .args([
+                "--title",
+                "fixture",
+                "--project",
+                "fixture",
+                "--preset",
+                "hd",
+                "--background",
+            ])
+            .output()
+            .unwrap()
+    };
+    fs::write(&lrc, "[00:00.10]one\n[00:00.10]two\n[00:00.80]\n").unwrap();
+    let rejected = run();
+    assert!(!rejected.status.success());
+    let error = String::from_utf8_lossy(&rejected.stderr);
+    assert!(error.contains("1行"), "unexpected rejection: {error}");
+    assert!(
+        error.contains("字幕の幅と配置"),
+        "measurement notice is absent: {error}"
+    );
+    assert!(rejected.stdout.is_empty());
+    fs::write(&lrc, "[00:00.10]one\n[00:00.80]\n").unwrap();
+    let accepted = run();
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    assert!(String::from_utf8_lossy(&accepted.stderr).contains("字幕の幅と配置"));
+    let output = String::from_utf8(accepted.stdout).unwrap();
+    let output = std::path::Path::new(output.trim());
+    assert_eq!(
+        fs::read_to_string(output.join("lyrics.lrc")).unwrap(),
+        fs::read_to_string(lrc).unwrap()
+    );
+}
+
+#[test]
 fn render_preserves_48khz_high_band_and_source() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.wav");
