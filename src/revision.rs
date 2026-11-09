@@ -242,6 +242,22 @@ fn history_save_result(
 }
 
 /// The editor displays the timeline of the already playable audio, including tempo changes.
+fn initial_history_draft(previous: &Options, text: &str, duration: f64) -> Result<TimingDraft> {
+    // Older results may contain lyrics that predate the strict history rules. They can
+    // still be revised; history then starts from the new valid lyrics.
+    // Option errors propagate. After validation, editable_lrc can only fail on old lyrics syntax.
+    previous.validate()?;
+    let original = editable_lrc(previous).unwrap_or_default();
+    if original.trim().is_empty() {
+        return TimingDraft::from_lrc(text, duration);
+    }
+    match TimingDraft::from_lrc(&original, duration) {
+        Ok(draft) => Ok(draft),
+        Err(_) => TimingDraft::from_lrc(text, duration),
+    }
+}
+
+/// The editor displays the timeline of the already playable audio, including tempo changes.
 pub fn editable_lrc(options: &Options) -> Result<String> {
     options.validate()?;
     let mut lrc = String::new();
@@ -290,14 +306,7 @@ pub fn render_revision(
         let lines = timed_lines_from_lrc(text, duration)?;
         let mut draft = match load_history(source, duration)? {
             Some(draft) => draft,
-            None => {
-                let original = editable_lrc(&previous)?;
-                if original.trim().is_empty() {
-                    TimingDraft::from_lrc(text, duration)?
-                } else {
-                    TimingDraft::from_lrc(&original, duration)?
-                }
-            }
+            None => initial_history_draft(&previous, text, duration)?,
         };
         draft.replace(lines)?;
         save_history_new(dir, &draft)?;
@@ -329,6 +338,22 @@ pub fn render_revision(
 #[cfg(test)]
 mod timing_tests {
     use super::*;
+    #[test]
+    fn first_revision_history_starts_from_new_lyrics_when_original_is_not_strict() {
+        let previous = Options {
+            lyrics: "[00:01.00]before\n[00:09.00]late\n".into(),
+            ..Options::default()
+        };
+        assert!(TimingDraft::from_lrc(&editable_lrc(&previous).unwrap(), 5.0).is_err());
+        let draft = initial_history_draft(&previous, "[00:01.00]after\n[00:02.00]\n", 5.0).unwrap();
+        assert_eq!(draft.lines()[0].text, "after");
+        let valid = Options {
+            lyrics: "[00:01.00]original\n[00:02.00]\n".into(),
+            ..Options::default()
+        };
+        let draft = initial_history_draft(&valid, "[00:01.00]after\n[00:02.00]\n", 5.0).unwrap();
+        assert_eq!(draft.lines()[0].text, "original");
+    }
     #[test]
     fn history_reader_accepts_limit_and_stops_after_one_excess_byte() {
         const LIMIT: usize = 16 * 1024 * 1024;
