@@ -442,6 +442,118 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
 }
 
 #[test]
+fn subtitle_revision_chain_inherits_history_and_never_writes_to_its_source() {
+    use karaoke_maker::{presentation::VideoPreset, revision};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let signal: Vec<f32> = (0..44100 * 4)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 261.6256 / 44100.0).sin() * 0.2)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let first = temp.path().join("first");
+    fs::create_dir(&first).unwrap();
+    media::write_stereo(&first.join("instrumental-raw.wav"), &signal, &signal).unwrap();
+    media::write_stereo(&first.join("vocals.wav"), &signal, &signal).unwrap();
+    let tools = Tools::discover();
+    let options = Options {
+        key: 3,
+        tempo: 1.25,
+        sample_rate: 44100,
+        lyrics: "[00:00.50]before\n[00:02.00]next".into(),
+        ..Options::default()
+    };
+    media::export(
+        &tools,
+        &source,
+        &first,
+        &media::probe(&tools, &source).unwrap(),
+        &options,
+        4.0,
+        &Progress::default(),
+    )
+    .unwrap();
+    // An older result whose stored lyrics no longer satisfy the strict timing rules
+    // (a cue beyond the song end) can still be revised; its history starts from the new text.
+    let legacy = Options {
+        lyrics: "[00:00.50]before\n[00:09.00]late\n".into(),
+        ..options.clone()
+    };
+    fs::write(
+        first.join("settings.json"),
+        serde_json::to_vec(&legacy).unwrap(),
+    )
+    .unwrap();
+    let snapshot = |dir: &std::path::Path| -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    fs::read(entry.path()).unwrap(),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let revise = |from: &std::path::Path, name: &str, text: &str| {
+        let dir = temp.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        revision::render_revision(from, &dir, text, VideoPreset::Hd, &Progress::default()).unwrap();
+        dir
+    };
+    let first_before = snapshot(&first);
+    let second = revise(&first, "second", "[00:00.40]one\n[00:01.60]\n");
+    assert_eq!(snapshot(&first), first_before);
+    let history = revision::load_history(&second, 3.2).unwrap().unwrap();
+    assert_eq!(history.lines()[0].text, "one");
+    let second_before = snapshot(&second);
+    let third = revise(&second, "third", "[00:00.40]two\n[00:01.60]\n");
+    assert_eq!(snapshot(&second), second_before);
+    let fourth = revise(&third, "fourth", "[00:00.40]three\n[00:01.60]\n");
+    let mut history = revision::load_history(&fourth, 3.2).unwrap().unwrap();
+    let mut seen = vec![history.lines()[0].text.clone()];
+    while history.undo() {
+        seen.push(history.lines()[0].text.clone());
+    }
+    assert_eq!(seen, ["three", "two", "one"]);
+    // A corrupt history in the source is rejected without creating anything in the new folder.
+    let broken = temp.path().join("broken");
+    fs::create_dir(&broken).unwrap();
+    for name in ["settings.json", "karaoke.wav", "vocals.wav"] {
+        fs::copy(fourth.join(name), broken.join(name)).unwrap();
+    }
+    fs::write(broken.join("timing-history.json"), b"{broken").unwrap();
+    let rejected = temp.path().join("rejected");
+    fs::create_dir(&rejected).unwrap();
+    assert!(
+        revision::render_revision(
+            &broken,
+            &rejected,
+            "[00:00.40]x\n[00:01.60]\n",
+            VideoPreset::Hd,
+            &Progress::default()
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read_dir(&rejected).unwrap().count(), 0);
+    for dir in [&second, &third, &fourth] {
+        assert!(fs::read_dir(dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
+    assert_eq!(
+        fs::read(broken.join("timing-history.json")).unwrap(),
+        b"{broken"
+    );
+}
+
+#[test]
 fn real_ffmpeg_exports_retimed_pitched_audio_and_captioned_video_without_modifying_source() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.wav");
