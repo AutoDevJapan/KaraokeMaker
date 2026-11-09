@@ -295,12 +295,46 @@ pub fn make_ass_styled(
     preset: VideoPreset,
     style: &VisualStyle,
 ) -> Result<String> {
+    ass_with_layout(title, cues, duration, tempo, preset, style, None)
+}
+
+/// Subtitles laid out with a saved project template: margins by orientation and a line limit.
+pub fn make_ass_templated(
+    title: &str,
+    cues: &[Cue],
+    duration: f64,
+    tempo: f64,
+    preset: VideoPreset,
+    template: &crate::template::Template,
+) -> Result<String> {
+    template.validate(&template.project)?;
+    ass_with_layout(
+        title,
+        cues,
+        duration,
+        tempo,
+        preset,
+        &template.style,
+        Some(template),
+    )
+}
+
+fn ass_with_layout(
+    title: &str,
+    cues: &[Cue],
+    duration: f64,
+    tempo: f64,
+    preset: VideoPreset,
+    style: &VisualStyle,
+    template: Option<&crate::template::Template>,
+) -> Result<String> {
     validate_timeline(cues, duration, tempo)?;
     style.validate()?;
     let (width, height) = preset.dimensions();
     let scale = width as f64 / 1280.0;
     let scaled = |value: f64| (value * scale).round() as u32;
-    let (left, right, bottom, top) =
+    let portrait = matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd);
+    let (mut left, mut right, mut bottom, mut top) =
         if matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd) {
             let factor = width as f64 / 1080.0;
             let safe = |value: f64| (value * factor).round() as u32;
@@ -308,9 +342,39 @@ pub fn make_ass_styled(
         } else {
             (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
         };
+    if let Some(template) = template {
+        // Never smaller than the built-in platform safe area; the template can only widen it.
+        let margin = if portrait {
+            template.vertical_margin
+        } else {
+            template.horizontal_margin
+        };
+        let side = (margin * width as f64).round() as u32;
+        let edge = (margin * height as f64).round() as u32;
+        left = left.max(side);
+        right = right.max(side);
+        top = top.max(edge);
+        bottom = bottom.max(edge);
+    }
     let font = &style.font;
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
+    if let Some(template) = template {
+        // CJK glyphs are about one font size wide, so this is a safe upper bound.
+        let per_line = (width.saturating_sub(left + right) / lyric_size).max(1) as usize;
+        for cue in cues {
+            let lines: usize = cue
+                .text
+                .split('\n')
+                .map(|line| line.chars().count().div_ceil(per_line).max(1))
+                .sum();
+            ensure!(
+                lines <= template.max_lines as usize,
+                "字幕が{}行を超えます。余白か行数を調整してください。",
+                template.max_lines
+            );
+        }
+    }
     let title_size = scaled(28.0);
     let outline = scaled(3.0);
     let title_outline = scaled(2.0);
@@ -380,6 +444,66 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn template(horizontal: f64, vertical: f64, max_lines: u8) -> crate::template::Template {
+        crate::template::Template {
+            version: 1,
+            project: "客先A".into(),
+            style: VisualStyle::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: horizontal,
+            vertical_margin: vertical,
+            max_lines,
+        }
+    }
+    fn lyric_margins(ass: &str) -> Vec<u32> {
+        let style = ass
+            .lines()
+            .find(|l| l.starts_with("Style: Lyrics"))
+            .unwrap();
+        let f: Vec<&str> = style.split(',').collect();
+        f[19..22].iter().map(|v| v.parse().unwrap()).collect()
+    }
+    #[test]
+    fn template_margins_apply_per_orientation_and_never_shrink_safe_area() {
+        let cues = parse_lrc("[00:01.00]歌\n[00:02.00]\n").unwrap();
+        let t = template(0.2, 0.1, 2);
+        let wide = make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::FullHd, &t).unwrap();
+        assert_eq!(lyric_margins(&wide), vec![384, 384, 216]);
+        let tall = make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &t).unwrap();
+        assert_eq!(lyric_margins(&tall), vec![108, 160, 320]);
+        let small = template(0.0, 0.0, 2);
+        let base =
+            make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &small).unwrap();
+        assert_eq!(lyric_margins(&base), vec![80, 160, 320]);
+    }
+    #[test]
+    fn template_rejects_subtitles_that_would_need_more_lines_than_allowed() {
+        let long = "あ".repeat(60);
+        let cues = parse_lrc(&format!("[00:01.00]{long}\n[00:02.00]\n")).unwrap();
+        assert!(
+            make_ass_templated(
+                "曲",
+                &cues,
+                3.0,
+                1.0,
+                VideoPreset::Hd,
+                &template(0.05, 0.05, 1)
+            )
+            .is_err()
+        );
+        assert!(
+            make_ass_templated(
+                "曲",
+                &cues,
+                3.0,
+                1.0,
+                VideoPreset::Hd,
+                &template(0.05, 0.05, 3)
+            )
+            .is_ok()
+        );
+    }
     #[test]
     fn blank_at_song_end_is_editable_and_does_not_extend_srt() {
         let cues = parse_lrc("[00:01.00]end\n[00:10.00]\n").unwrap();
