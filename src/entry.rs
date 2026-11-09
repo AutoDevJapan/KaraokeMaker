@@ -113,10 +113,10 @@ enum Mode {
     /// 検査対象は変更しません。不合格があれば終了コード1です。
     InspectDelivery {
         /// Write a local editable manual-review JSON form (never overwrites).
-        #[arg(long)]
+        #[arg(long, requires = "settings")]
         manual_form: Option<PathBuf>,
         /// Read an operator-authored review, bound to this source/settings/output hash set.
-        #[arg(long)]
+        #[arg(long, requires = "settings")]
         manual_review: Option<PathBuf>,
         /// Settings used to produce the deliverables (SHA-256 recorded).
         #[arg(long)]
@@ -262,7 +262,7 @@ fn run() -> Result<()> {
             }
             if let Some(path) = manual_form {
                 use std::io::Write;
-                let bytes = serde_json::to_vec_pretty(&report.manual_form())?;
+                let bytes = serde_json::to_vec_pretty(&report.manual_form()?)?;
                 fs::OpenOptions::new()
                     .create_new(true)
                     .write(true)

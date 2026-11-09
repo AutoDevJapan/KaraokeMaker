@@ -128,10 +128,14 @@ pub struct Criteria {
 }
 
 impl Report {
-    pub fn manual_form(&self) -> ManualReview {
-        ManualReview {
+    pub fn manual_form(&self) -> Result<ManualReview> {
+        let settings = self
+            .settings
+            .as_ref()
+            .context("人手確認の記録には設定ファイルが必要です。--settingsを指定してください。")?;
+        Ok(ManualReview {
             source_sha256: self.source.sha256.clone(),
-            settings_sha256: self.settings.as_ref().map(|s| s.sha256.clone()),
+            settings_sha256: Some(settings.sha256.clone()),
             files: self
                 .files
                 .iter()
@@ -142,12 +146,12 @@ impl Report {
             full_listening: "unchecked".into(),
             full_visual_check: "unchecked".into(),
             notes: String::new(),
-        }
+        })
     }
     pub fn read_manual_review(&mut self, path: &Path) -> Result<()> {
         self.operator_review = None;
         let review: ManualReview = serde_json::from_slice(&fs::read(path)?)?;
-        let expected = self.manual_form();
+        let expected = self.manual_form()?;
         ensure!(
             review.source_sha256 == expected.source_sha256
                 && review.settings_sha256 == expected.settings_sha256
