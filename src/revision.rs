@@ -34,12 +34,14 @@ struct SavedTimingDraft {
 impl TimingDraft {
     /// Persist current lyrics and undo history without embedding media or paths.
     pub fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&SavedTimingDraft {
+        let text = serde_json::to_string(&SavedTimingDraft {
             version: 1,
             duration: self.duration,
             lines: self.lines.clone(),
             undo: self.undo.clone(),
-        })?)
+        })?;
+        ensure!(text.len() <= 16 * 1024 * 1024, "編集履歴が大きすぎます。");
+        Ok(text)
     }
 
     pub fn from_json(text: &str, expected_duration: f64) -> Result<Self> {
@@ -293,6 +295,24 @@ mod timing_tests {
         assert!(TimingDraft::from_json(&json, 6.0).is_err());
         let invalid = json.replace("changed", "[00:04.00]injected");
         assert!(TimingDraft::from_json(&invalid, 5.0).is_err());
+    }
+    #[test]
+    fn corrupt_unsupported_or_excessive_history_cannot_be_restored() {
+        let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        draft.replace(vec![line(2.0, 3.0, "changed")]).unwrap();
+        let json = draft.to_json().unwrap();
+        assert!(TimingDraft::from_json("{", 5.0).is_err());
+        assert!(
+            TimingDraft::from_json(&json.replace("\"version\":1", "\"version\":2"), 5.0).is_err()
+        );
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["undo"] = serde_json::json!(vec![vec![line(1.0, 2.0, "old")]; 101]);
+        assert!(TimingDraft::from_json(&value.to_string(), 5.0).is_err());
+        value["undo"] = serde_json::json!([vec![line(4.0, 3.0, "invalid")]]);
+        assert!(TimingDraft::from_json(&value.to_string(), 5.0).is_err());
+        assert_eq!(draft.lines()[0].text, "changed");
+        assert!(draft.undo());
+        assert_eq!(draft.lines()[0].text, "original");
     }
     #[test]
     fn accepted_edits_remain_readable_at_rounded_song_end() {
