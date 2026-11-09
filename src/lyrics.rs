@@ -575,8 +575,14 @@ fn ass_with_layout(
         title_right = ((1.0 - p.title.x - p.title.width) * width as f64).ceil() as u32;
         title_top = (p.title.y * height as f64).ceil() as u32;
         if template.is_some_and(|t| t.logo.is_some()) {
+            let logo_right = (width - right) as f64;
+            let logo_left = logo_right - ((width - left - right) as f64 * 0.25).round();
+            let logo_bottom = top as f64 + (height as f64 * 0.1).round();
             ensure!(
-                title_right >= right + logo_reserve,
+                !((width - title_right) as f64 > logo_left
+                    && (title_left as f64) < logo_right
+                    && (title_top as f64) < logo_bottom
+                    && (p.title.y + p.title.height) * height as f64 > top as f64),
                 "タイトル指定位置がロゴ枠と重なります。位置は自動変更しません。"
             );
         }
@@ -609,6 +615,14 @@ fn ass_with_layout(
     }
     let outline = scaled(3.0);
     let title_outline = scaled(2.0);
+    if let Some(p) = template.and_then(|t| t.placement.as_ref()) {
+        let count = wrapped(title, title_size, title_available).len();
+        ensure!(
+            count as f64 * title_size as f64 * 1.5 + 2.0 * title_outline as f64
+                <= p.title.height * height as f64,
+            "折返し後のタイトルが指定枠の高さを超えます。位置は自動変更しません。"
+        );
+    }
     let shadow = scaled(1.0);
     // libass rasterizes the vector glyphs after scaling the video to the target size.
     let mut ass = format!(
@@ -675,6 +689,50 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_title_overflow_is_rejected_and_vertical_separation_from_logo_is_allowed() {
+        use crate::template::{Placement, Rect};
+        let mut t = template(0.05, 0.05, 1);
+        t.placement = Some(Placement {
+            title: Rect {
+                x: 0.2,
+                y: 0.15,
+                width: 0.2,
+                height: 0.06,
+            },
+            subtitles: Rect {
+                x: 0.2,
+                y: 0.6,
+                width: 0.6,
+                height: 0.2,
+            },
+            avoid: vec![Rect {
+                x: 0.2,
+                y: 0.22,
+                width: 0.2,
+                height: 0.2,
+            }],
+        });
+        let cues = parse_lrc("[00:00.10]歌\n[00:00.90]\n").unwrap();
+        for preset in [VideoPreset::FullHd, VideoPreset::Vertical] {
+            assert!(make_ass_templated(&"あ".repeat(40), &cues, 1.0, 1.0, preset, &t).is_err());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logo.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nrest").unwrap();
+        t.logo = Some(path);
+        let p = t.placement.as_mut().unwrap();
+        p.avoid.clear();
+        p.title = Rect {
+            x: 0.55,
+            y: 0.3,
+            width: 0.3,
+            height: 0.1,
+        };
+        assert!(make_ass_templated("曲", &cues, 1.0, 1.0, VideoPreset::FullHd, &t).is_ok());
+        t.placement.as_mut().unwrap().title.y = 0.05;
+        assert!(make_ass_templated("曲", &cues, 1.0, 1.0, VideoPreset::FullHd, &t).is_err());
+    }
     #[test]
     fn long_single_word_wraps_without_changing_its_timing() {
         let mut t = template(0.1, 0.1, 4);
