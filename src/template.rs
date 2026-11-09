@@ -45,8 +45,9 @@ impl Template {
                 path.is_absolute() && path.is_file(),
                 "素材の絶対パスを確認してください。"
             );
-            // Only plain still images; playlists and other container formats can name
-            // further inputs, so they are refused before ffmpeg ever opens them.
+            // Only PNG or JPEG files by name and by file signature, so a renamed playlist
+            // or video is refused before ffmpeg opens it. This is not a full image check:
+            // ffmpeg is also told to read the file as a still image (-f image2).
             let extension = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -54,6 +55,14 @@ impl Template {
             ensure!(
                 matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg")),
                 "素材はPNGまたはJPEGの画像にしてください。"
+            );
+            let mut head = [0u8; 8];
+            let read = fs::File::open(path)
+                .and_then(|mut file| std::io::Read::read(&mut file, &mut head))?;
+            ensure!(
+                head[..read].starts_with(b"\x89PNG\r\n\x1a\n")
+                    || head[..read].starts_with(&[0xff, 0xd8, 0xff]),
+                "素材の中身がPNGまたはJPEGではありません。"
             );
         }
         Ok(())
@@ -197,9 +206,19 @@ mod tests {
             ("noext", false),
         ] {
             let path = dir.path().join(name);
-            fs::write(&path, b"x").unwrap();
+            let content: &[u8] = if name.to_ascii_lowercase().ends_with("png") {
+                b"\x89PNG\r\n\x1a\nrest"
+            } else {
+                &[0xff, 0xd8, 0xff, 0xe0, 0, 0]
+            };
+            fs::write(&path, content).unwrap();
             value.logo = Some(path);
             assert_eq!(value.validate("project-a").is_ok(), accepted, "{name}");
         }
+        // A playlist renamed to .png is refused by its content.
+        let fake = dir.path().join("playlist.png");
+        fs::write(&fake, b"#EXTM3U\nhttp://example.invalid/a.ts\n").unwrap();
+        value.logo = Some(fake);
+        assert!(value.validate("project-a").is_err());
     }
 }

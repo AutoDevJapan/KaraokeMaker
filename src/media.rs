@@ -555,6 +555,8 @@ pub fn export(
             "30".into(),
             "-protocol_whitelist".into(),
             "file".into(),
+            "-f".into(),
+            "image2".into(),
             "-i".into(),
             image.display().to_string(),
         ]);
@@ -583,6 +585,8 @@ pub fn export(
         args.extend([
             "-protocol_whitelist".into(),
             "file".into(),
+            "-f".into(),
+            "image2".into(),
             "-i".into(),
             logo.display().to_string(),
         ]);
