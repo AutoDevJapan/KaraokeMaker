@@ -14,6 +14,7 @@ pub mod roformer;
 pub mod runtime;
 pub mod spectral;
 pub mod suno;
+pub mod template;
 pub mod web;
 
 #[cfg(test)]
