@@ -114,6 +114,80 @@ fn ass_text(text: &str) -> String {
     subtitle_text(text).replace('\n', "\\N")
 }
 
+// Escaping display fragments must not remove spaces (a fragment can be a space).
+fn ass_fragment(text: &str) -> String {
+    text.replace('\\', "＼")
+        .replace('{', "｛")
+        .replace('}', "｝")
+        .replace('<', "＜")
+        .replace('>', "＞")
+        .replace('\r', "")
+        .replace('\n', "\\N")
+}
+
+fn measured_lines(
+    text: &str,
+    font: &str,
+    size: u32,
+    outline: u32,
+    width: u32,
+) -> Result<Vec<String>> {
+    measured_lines_styled(text, font, size, outline, true, width)
+}
+
+fn measured_lines_styled(
+    text: &str,
+    font: &str,
+    size: u32,
+    outline: u32,
+    bold: bool,
+    width: u32,
+) -> Result<Vec<String>> {
+    let mut result = Vec::new();
+    for line in text.split('\n') {
+        let clusters: Vec<_> = glyph_clusters(line).into_iter().map(|c| c.0).collect();
+        let mut start = 0;
+        if clusters.is_empty() {
+            result.push(String::new());
+        }
+        while start < clusters.len() {
+            let (mut low, mut high) = (start + 1, clusters.len() + 1);
+            ensure!(
+                crate::ass_layout::measure_styled(font, size, outline, bold, &clusters[start])?.0
+                    <= width,
+                "字幕の1文字が指定幅に収まりません。"
+            );
+            while low + 1 < high {
+                let mid = (low + high) / 2;
+                if crate::ass_layout::measure_styled(
+                    font,
+                    size,
+                    outline,
+                    bold,
+                    &clusters[start..mid].concat(),
+                )?
+                .0 <= width
+                {
+                    low = mid
+                } else {
+                    high = mid
+                }
+            }
+            if low < clusters.len()
+                && clusters[low - 1].chars().all(|c| c.is_ascii_alphanumeric())
+                && clusters[low].chars().all(|c| c.is_ascii_alphanumeric())
+                && let Some(space) = (start..low).rev().find(|&i| clusters[i] == " ")
+                && space > start
+            {
+                low = space + 1;
+            }
+            result.push(clusters[start..low].concat());
+            start = low;
+        }
+    }
+    Ok(result)
+}
+
 fn stamp(seconds: f64) -> String {
     let cs = (seconds.max(0.0) * 100.0).round() as u64;
     format!(
@@ -157,8 +231,7 @@ pub fn make_ass_words(
     let budget = template.map(|_| {
         let (width, _) = preset.dimensions();
         let (left, right, _, _) = layout_margins(preset, template);
-        let size = (44.0 * width as f64 / 1280.0).round();
-        width.saturating_sub(left + right) as f64 / (size * 1.1)
+        width.saturating_sub(left + right)
     });
     let mut first = 0;
     while first < words.len() {
@@ -175,7 +248,7 @@ pub fn make_ass_words(
         let start = words[first].start / tempo;
         let end = words[last - 1].end.min(duration) / tempo;
         let mut text = String::new();
-        let mut used = 0.0;
+        let mut rendered_line = String::new();
         let mut lines = 1;
         for (n, word) in words[first..last].iter().enumerate() {
             let next = words[first..last]
@@ -189,18 +262,37 @@ pub fn make_ass_words(
                 ""
             };
             if let Some(budget) = budget {
-                let width: f64 = spacing.len() as f64 * 0.6
-                    + word
-                        .text
-                        .chars()
-                        .map(|c| if c.is_ascii() { 0.6 } else { 1.0 })
-                        .sum::<f64>();
-                if used + width > budget && used > 0.0 {
+                let size = (44.0 * preset.dimensions().0 as f64 / 1280.0).round() as u32;
+                let outline = (3.0 * preset.dimensions().0 as f64 / 1280.0).round() as u32;
+                let candidate = format!("{rendered_line}{spacing}{}", word.text);
+                if !rendered_line.is_empty()
+                    && crate::ass_layout::measure(&style.font, size, outline, &candidate)?.0
+                        > budget
+                {
                     text.push_str("\\N");
-                    used = 0.0;
                     lines += 1;
+                    rendered_line.clear();
                 }
-                used += width;
+                let fragments = measured_lines(&word.text, &style.font, size, outline, budget)?;
+                let total = word.text.chars().count().max(1) as u64;
+                let mut consumed = 0u64;
+                for (i, part) in fragments.iter().enumerate() {
+                    if i > 0 {
+                        text.push_str("\\N");
+                        lines += 1;
+                        rendered_line.clear();
+                    }
+                    let next = consumed + part.chars().count() as u64;
+                    let part_fill = fill * next / total - fill * consumed / total;
+                    if i == 0 {
+                        text.push_str(spacing);
+                        rendered_line.push_str(spacing);
+                    }
+                    text.push_str(&format!("{{\\kf{part_fill}}}{}", ass_fragment(part)));
+                    rendered_line.push_str(part);
+                    consumed = next;
+                }
+                continue;
             }
             text.push_str(&format!("{spacing}{{\\kf{fill}}}{}", ass_text(&word.text)));
         }
@@ -313,7 +405,7 @@ fn glyph_clusters(line: &str) -> Vec<(String, f64)> {
             text.push(chars.next().unwrap());
         }
         while let Some(&next) = chars.peek() {
-            let mark = matches!(next, '\u{0300}'..='\u{036F}' | '\u{3099}' | '\u{309A}' | '\u{FE00}'..='\u{FE0F}' | '\u{200D}');
+            let mark = matches!(next, '\u{0300}'..='\u{036F}' | '\u{3099}' | '\u{309A}' | '\u{FE00}'..='\u{FE0F}' | '\u{1F3FB}'..='\u{1F3FF}' | '\u{200D}');
             if !mark {
                 break;
             }
@@ -331,80 +423,6 @@ fn glyph_clusters(line: &str) -> Vec<(String, f64)> {
     clusters
 }
 
-/// Greedy line filling: breaks at spaces and between non-ASCII clusters, splitting an ASCII
-/// word only when it is wider than a whole line.
-fn fill_lines(line: &str, budget: f64) -> Vec<String> {
-    // Units: ASCII words stay whole, every other cluster stands alone, spaces separate.
-    let mut units: Vec<(String, f64, bool)> = Vec::new();
-    for (text, width) in glyph_clusters(line) {
-        let ascii_word = text.chars().all(|c| c.is_ascii() && c != ' ');
-        match units.last_mut() {
-            Some(last) if ascii_word && last.2 => {
-                last.0.push_str(&text);
-                last.1 += width;
-            }
-            _ => units.push((text, width, ascii_word)),
-        }
-    }
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut used = 0.0;
-    let mut push_line = |current: &mut String, used: &mut f64| {
-        lines.push(current.trim_end().to_string());
-        current.clear();
-        *used = 0.0;
-    };
-    for (text, width, ascii_word) in units {
-        let space = text == " ";
-        if space && current.is_empty() {
-            continue;
-        }
-        if used + width > budget && !current.is_empty() && !space {
-            push_line(&mut current, &mut used);
-        }
-        if ascii_word && width > budget {
-            // A word wider than a line: split it by characters.
-            for (piece, piece_width) in glyph_clusters(&text) {
-                if used + piece_width > budget && !current.is_empty() {
-                    push_line(&mut current, &mut used);
-                }
-                current.push_str(&piece);
-                used += piece_width;
-            }
-            continue;
-        }
-        current.push_str(&text);
-        used += width;
-    }
-    lines.push(current.trim_end().to_string());
-    lines
-}
-
-/// Break text into lines whose estimated width (full-width glyph = 1, ASCII = 0.6) fits the
-/// budget, then even them out so that no line is left with a stray last character.
-fn wrap_to_width(text: &str, budget: f64) -> Vec<String> {
-    let mut lines = Vec::new();
-    for line in text.split('\n') {
-        let greedy = fill_lines(line, budget);
-        let count = greedy.len();
-        if count < 2 {
-            lines.extend(greedy);
-            continue;
-        }
-        // The narrowest width that still gives the same number of lines.
-        let (mut low, mut high) = (budget / count as f64, budget);
-        for _ in 0..24 {
-            let middle = (low + high) / 2.0;
-            if fill_lines(line, middle).len() <= count {
-                high = middle;
-            } else {
-                low = middle;
-            }
-        }
-        lines.extend(fill_lines(line, high));
-    }
-    lines
-}
 pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
     make_ass_styled(
         title,
@@ -559,9 +577,20 @@ fn ass_with_layout(
         title_left = (p.title.x * width as f64).ceil() as u32;
         title_right = ((1.0 - p.title.x - p.title.width) * width as f64).ceil() as u32;
         title_top = (p.title.y * height as f64).ceil() as u32;
-        if template.is_some_and(|t| t.logo.is_some()) {
+        if let Some(path) = template.and_then(|t| t.logo.as_deref()) {
+            let logo_right = (width - right) as f64;
+            let (logo_width, logo_height) = crate::ass_layout::scaled_image(
+                path,
+                ((width - left - right) as f64 * 0.25).round() as u32,
+                (height as f64 * 0.1).round() as u32,
+            )?;
+            let logo_left = logo_right - logo_width as f64;
+            let logo_bottom = top as f64 + logo_height as f64;
             ensure!(
-                title_right >= right + logo_reserve,
+                !((width - title_right) as f64 > logo_left
+                    && (title_left as f64) < logo_right
+                    && (title_top as f64) < logo_bottom
+                    && (p.title.y + p.title.height) * height as f64 > top as f64),
                 "タイトル指定位置がロゴ枠と重なります。位置は自動変更しません。"
             );
         }
@@ -570,23 +599,30 @@ fn ass_with_layout(
                 >= lyric_size as f64 * 1.5 * template.unwrap().max_lines as f64,
             "字幕配置の高さが行数に対して足りません。"
         );
-        ensure!(
-            p.title.height * height as f64 >= title_size as f64 * 1.5,
-            "タイトル配置の高さが足りません。"
-        );
     }
     let title_available = width.saturating_sub(title_left + title_right) as f64;
-    let wrapped = |text: &str, size: u32, available: f64| -> Vec<String> {
+    let wrapped = |text: &str, size: u32, available: f64| -> Result<Vec<String>> {
         if fixed_wrap {
-            wrap_to_width(text, available / (size as f64 * 1.1))
+            measured_lines_styled(
+                text,
+                font,
+                size,
+                if size == title_size {
+                    scaled(2.0)
+                } else {
+                    scaled(3.0)
+                },
+                size != title_size,
+                available as u32,
+            )
         } else {
-            vec![text.to_string()]
+            Ok(vec![text.to_string()])
         }
     };
     if let (Some(template), true) = (template, fixed_wrap) {
         for cue in cues {
             ensure!(
-                wrapped(&cue.text, lyric_size, available).len() <= template.max_lines as usize,
+                wrapped(&cue.text, lyric_size, available)?.len() <= template.max_lines as usize,
                 "字幕が{}行を超えます。余白か行数を調整してください。",
                 template.max_lines
             );
@@ -594,6 +630,21 @@ fn ass_with_layout(
     }
     let outline = scaled(3.0);
     let title_outline = scaled(2.0);
+    if let Some(p) = template.and_then(|t| t.placement.as_ref()) {
+        let title_lines = wrapped(title, title_size, title_available)?;
+        let actual_height = crate::ass_layout::measure_styled(
+            font,
+            title_size,
+            title_outline,
+            false,
+            &title_lines.join("\n"),
+        )?
+        .1;
+        ensure!(
+            actual_height as f64 <= p.title.height * height as f64,
+            "折返し後のタイトルが指定枠の高さを超えます。位置は自動変更しません。"
+        );
+    }
     let shadow = scaled(1.0);
     // libass rasterizes the vector glyphs after scaling the video to the target size.
     let mut ass = format!(
@@ -602,7 +653,7 @@ fn ass_with_layout(
     ass.push_str(&format!(
         "Dialogue: 0,0:00:00.00,{},Title,,0,0,0,,{}\n",
         stamp(duration / tempo),
-        ass_text(&wrapped(title, title_size, title_available).join("\n"))
+        ass_text(&wrapped(title, title_size, title_available)?.join("\n"))
     ));
     for (index, cue) in cues.iter().enumerate() {
         let end = cues
@@ -617,7 +668,7 @@ fn ass_with_layout(
             "Dialogue: 1,{},{},Lyrics,,0,0,0,,{{\\kf{fill}}}{}\n",
             stamp(cue.seconds / tempo),
             stamp(end / tempo),
-            ass_text(&wrapped(&cue.text, lyric_size, available).join("\n"))
+            ass_text(&wrapped(&cue.text, lyric_size, available)?.join("\n"))
         ));
     }
     Ok(ass)
@@ -660,6 +711,204 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn measured_word_layout_accepts_existing_fit_and_preserves_spaces_and_modifiers() {
+        let mut t = template(0.1, 0.1, 1);
+        let word = |text: String| {
+            vec![crate::alignment::Word {
+                text,
+                start: 0.1,
+                end: 0.9,
+                confidence: 1.0,
+                join_previous: false,
+                line_index: 0,
+            }]
+        };
+        let fitting = "あいうえおかきくけこ".repeat(2) + "あいうえお";
+        for preset in [VideoPreset::FullHd, VideoPreset::Vertical] {
+            assert!(
+                make_ass_words(
+                    "",
+                    &word(fitting.clone()),
+                    1.0,
+                    1.0,
+                    preset,
+                    &t.style,
+                    Some(&t)
+                )
+                .is_ok()
+            );
+        }
+        t.max_lines = 4;
+        let english = "hello world this is a long synthetic phrase for karaoke";
+        let ass = make_ass_words(
+            "",
+            &word(english.into()),
+            1.0,
+            1.0,
+            VideoPreset::FullHd,
+            &t.style,
+            Some(&t),
+        )
+        .unwrap();
+        let line = ass.lines().find(|l| l.starts_with("Dialogue: 1")).unwrap();
+        let payload = line.splitn(10, ',').nth(9).unwrap();
+        let mut plain = String::new();
+        let mut tag = false;
+        for c in payload.chars() {
+            if c == '{' {
+                tag = true
+            } else if c == '}' {
+                tag = false
+            } else if !tag {
+                plain.push(c)
+            }
+        }
+        assert_eq!(plain.replace("\\N", ""), english);
+        let clusters = glyph_clusters(&"👍🏽".repeat(20));
+        assert_eq!(clusters.len(), 20);
+        assert!(clusters.iter().all(|c| c.0 == "👍🏽"));
+    }
+    #[test]
+    fn explicit_title_overflow_is_rejected_and_vertical_separation_from_logo_is_allowed() {
+        use crate::template::{Placement, Rect};
+        let mut t = template(0.05, 0.05, 1);
+        t.placement = Some(Placement {
+            title: Rect {
+                x: 0.2,
+                y: 0.15,
+                width: 0.2,
+                height: 0.06,
+            },
+            subtitles: Rect {
+                x: 0.2,
+                y: 0.6,
+                width: 0.6,
+                height: 0.2,
+            },
+            avoid: vec![Rect {
+                x: 0.2,
+                y: 0.22,
+                width: 0.2,
+                height: 0.2,
+            }],
+        });
+        let cues = parse_lrc("[00:00.10]歌\n[00:00.90]\n").unwrap();
+        for preset in [VideoPreset::FullHd, VideoPreset::Vertical] {
+            let long = if matches!(preset, VideoPreset::FullHd) {
+                40
+            } else {
+                100
+            };
+            assert!(make_ass_templated(&"あ".repeat(long), &cues, 1.0, 1.0, preset, &t).is_err());
+            assert!(make_ass_templated("曲", &cues, 1.0, 1.0, preset, &t).is_ok());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logo.png");
+        assert!(
+            crate::media::hidden_command(crate::media::Tools::discover().ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=red:s=64x64",
+                    "-frames:v",
+                    "1"
+                ])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        t.logo = Some(path);
+        let p = t.placement.as_mut().unwrap();
+        p.avoid.clear();
+        p.title = Rect {
+            x: 0.55,
+            y: 0.3,
+            width: 0.3,
+            height: 0.1,
+        };
+        assert!(make_ass_templated("曲", &cues, 1.0, 1.0, VideoPreset::FullHd, &t).is_ok());
+        t.placement.as_mut().unwrap().title.y = 0.05;
+        assert!(make_ass_templated("曲", &cues, 1.0, 1.0, VideoPreset::FullHd, &t).is_err());
+        let tall = dir.path().join("tall.png");
+        assert!(
+            crate::media::hidden_command(crate::media::Tools::discover().ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=red:s=64x256",
+                    "-frames:v",
+                    "1"
+                ])
+                .arg(&tall)
+                .status()
+                .unwrap()
+                .success()
+        );
+        t.logo = Some(tall);
+        t.placement.as_mut().unwrap().title.width = 0.2;
+        assert!(make_ass_templated("曲", &cues, 1.0, 1.0, VideoPreset::FullHd, &t).is_ok());
+        let p = t.placement.as_mut().unwrap();
+        p.title.x = 0.78;
+        p.title.width = 0.12;
+        assert!(make_ass_templated("曲", &cues, 1.0, 1.0, VideoPreset::FullHd, &t).is_err());
+    }
+    #[test]
+    fn long_single_word_wraps_without_changing_its_timing() {
+        let mut t = template(0.1, 0.1, 4);
+        let words = vec![crate::alignment::Word {
+            text: "あいうえおかきくけこ".repeat(4),
+            start: 0.1,
+            end: 0.9,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        }];
+        for preset in [VideoPreset::FullHd, VideoPreset::Vertical] {
+            let ass = make_ass_words("曲", &words, 1.0, 1.0, preset, &t.style, Some(&t)).unwrap();
+            let line = ass.lines().find(|l| l.starts_with("Dialogue: 1")).unwrap();
+            assert!(line.contains("\\N"));
+            assert!(line.matches("\\kf").count() > 1);
+            assert!(line.contains("0:00:00.10,0:00:00.90"));
+            t.max_lines = 1;
+            assert!(make_ass_words("曲", &words, 1.0, 1.0, preset, &t.style, Some(&t)).is_err());
+            t.max_lines = 4;
+        }
+    }
+    #[test]
+    fn convert_preflight_checks_actual_words_instead_of_unused_lrc() {
+        let mut t = template(0.1, 0.1, 1);
+        let mut options = crate::media::Options {
+            lyrics: format!("[00:00.10]{}\n", "あ".repeat(40)),
+            words: (0..4)
+                .map(|i| crate::alignment::Word {
+                    text: "あ".repeat(10),
+                    start: 0.1 + i as f64 * 0.2,
+                    end: 0.3 + i as f64 * 0.2,
+                    confidence: 1.0,
+                    join_previous: false,
+                    line_index: i,
+                })
+                .collect(),
+            project: Some(t.project.clone()),
+            template: Some(t.clone()),
+            ..Default::default()
+        };
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_ok());
+        options.words.truncate(1);
+        options.words[0].text = "あ".repeat(40);
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_err());
+        t.max_lines = 4;
+        options.template = Some(t);
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_ok());
+    }
     fn template(horizontal: f64, vertical: f64, max_lines: u8) -> crate::template::Template {
         crate::template::Template {
             version: 1,
@@ -728,49 +977,6 @@ mod tests {
         let (a, b) = (title_margins(&plain), title_margins(&with_logo));
         assert!(b[0] >= a[0] + 150 && b[1] >= a[1] + 150, "{a:?} {b:?}");
         assert_eq!(b[2], a[2]);
-    }
-    #[test]
-    fn wrapping_balances_lines_and_never_splits_what_belongs_together() {
-        // 20 full-width characters over a budget of 19: two even lines, not 19 + 1.
-        let lines = wrap_to_width("あいうえおかきくけこさしすせそたちつてと", 19.0);
-        assert_eq!(lines.len(), 2);
-        assert!(lines.iter().all(|l| l.chars().count() >= 9), "{lines:?}");
-        // English breaks at spaces only; no word is cut and no space is left at a line end.
-        let text = "neon lights tonight and more neon lights tonight";
-        let lines = wrap_to_width(text, 14.0);
-        assert!(lines.len() > 1);
-        assert_eq!(lines.join(" "), text, "{lines:?}");
-        assert!(lines.iter().all(|l| l == l.trim()), "{lines:?}");
-        // A combining voiced mark never starts a line.
-        let lines = wrap_to_width(&"か\u{3099}".repeat(30), 21.0);
-        assert!(lines.len() > 1);
-        assert!(
-            lines.iter().all(|l| !l.starts_with('\u{3099}')),
-            "{lines:?}"
-        );
-        assert!(
-            lines.iter().all(|l| l.chars().count() % 2 == 0),
-            "{lines:?}"
-        );
-        // ZWJ emoji and flags stay whole.
-        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
-        let lines = wrap_to_width(&family.repeat(12), 5.0);
-        assert!(lines.len() > 1);
-        assert!(
-            lines.iter().all(|l| l.chars().count() % 5 == 0),
-            "{lines:?}"
-        );
-        let lines = wrap_to_width(&"\u{1F1FA}\u{1F1F8}".repeat(12), 5.0);
-        assert!(
-            lines.iter().all(|l| l.chars().count() % 2 == 0),
-            "{lines:?}"
-        );
-        // Closing punctuation stays with the text before it.
-        let lines = wrap_to_width(&format!("{}。", "あ".repeat(10)), 10.0);
-        assert!(lines.iter().all(|l| !l.starts_with('。')), "{lines:?}");
-        // A single word wider than a line is split instead of overflowing.
-        let lines = wrap_to_width("supercalifragilisticexpialidocious", 10.0);
-        assert!(lines.len() > 1 && lines.concat() == "supercalifragilisticexpialidocious");
     }
     #[test]
     fn template_margins_apply_per_orientation_and_never_shrink_safe_area() {

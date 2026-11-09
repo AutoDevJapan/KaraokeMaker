@@ -589,6 +589,8 @@ pub fn export(
             lyrics::layout_margins(options.preset, options.template.as_ref());
         let max_width = ((width - left - right) as f64 * 0.25).round() as u32;
         let max_height = (height as f64 * 0.1).round() as u32;
+        let (logo_width, logo_height) =
+            crate::ass_layout::scaled_image(logo, max_width, max_height)?;
         let edge = width - right;
         args.extend([
             "-protocol_whitelist".into(),
@@ -602,7 +604,7 @@ pub fn export(
         ]);
         args.extend([
             "-filter_complex".into(),
-            format!("[{video_map}]{base}[bg];[2:v]scale=w={max_width}:h={max_height}:force_original_aspect_ratio=decrease,format=rgba[logo];[bg][logo]overlay={edge}-w:{top},ass=lyrics.ass[v]"),
+            format!("[{video_map}]{base}[bg];[2:v]scale={logo_width}:{logo_height},format=rgba[logo];[bg][logo]overlay={edge}-w:{top},ass=lyrics.ass[v]"),
             "-map".into(), "[v]".into(),
         ]);
     } else {
@@ -670,6 +672,21 @@ pub fn export(
 /// Inputs remain untouched; the CLI allocates a fresh output directory per revision.
 /// Check timestamps and, with a template, the line limit before any slow processing starts.
 pub fn check_lyrics_layout(options: &Options, duration: f64) -> Result<()> {
+    if !options.words.is_empty() {
+        lyrics::make_ass_words(
+            &options.title,
+            &options.words,
+            duration,
+            options.tempo,
+            options.preset,
+            options
+                .template
+                .as_ref()
+                .map_or(&options.style, |t| &t.style),
+            options.template.as_ref(),
+        )?;
+        return Ok(());
+    }
     let cues = lyrics::parse_lrc(&options.lyrics)?;
     match &options.template {
         Some(template) => {
@@ -804,7 +821,10 @@ pub fn convert(
     let (left, right) = decode(&tools, &input, &dir, progress)?;
     let duration = left.len() as f64 / 44100.0;
     // Validate timestamps before spending time on inference.
-    if options.lyrics.trim().starts_with('[') || options.lyrics.trim().is_empty() {
+    if !options.words.is_empty()
+        || options.lyrics.trim().starts_with('[')
+        || options.lyrics.trim().is_empty()
+    {
         check_lyrics_layout(options, duration)?;
     }
     progress.set("歌声と伴奏を分離しています。初回はモデルを取得します。");
