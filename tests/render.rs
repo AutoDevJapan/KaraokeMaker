@@ -266,18 +266,13 @@ fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientat
             "{width}: logo reaches past the right safe edge {outside_logo:?}"
         );
     }
-    // One line is not enough for this lyric, and another project's template is refused.
+    // Two explicit simultaneous lines exceed a one-line template regardless of font metrics.
+    // The positive fixture above can legitimately fit on one line with another font.
     let refused = temp.path().join("refused");
     fs::create_dir(&refused).unwrap();
-    assert!(
-        media::render(
-            &source,
-            &refused,
-            &options(VideoPreset::FullHd, template(1)),
-            &Progress::default()
-        )
-        .is_err()
-    );
+    let mut two_lines = options(VideoPreset::FullHd, template(1));
+    two_lines.lyrics = "[00:00.20]灯りの下で\n[00:00.20]明日へ歩く\n[00:01.80]\n".into();
+    assert!(media::render(&source, &refused, &two_lines, &Progress::default()).is_err());
     let mut other = options(VideoPreset::FullHd, template(2));
     other.project = Some("別の客先".into());
     assert!(media::render(&source, &refused, &other, &Progress::default()).is_err());
@@ -499,15 +494,10 @@ fn template_word_timed_subtitles_stay_inside_margins_and_respect_the_line_limit(
     }
     let refused = temp.path().join("refused");
     fs::create_dir(&refused).unwrap();
-    assert!(
-        media::render(
-            &source,
-            &refused,
-            &options(VideoPreset::Vertical, template(1)),
-            &Progress::default()
-        )
-        .is_err()
-    );
+    let mut too_wide = options(VideoPreset::Vertical, template(1));
+    too_wide.words.truncate(1);
+    too_wide.words[0].text = "あいうえおかきくけこ".repeat(10);
+    assert!(media::render(&source, &refused, &too_wide, &Progress::default()).is_err());
 }
 
 #[test]
