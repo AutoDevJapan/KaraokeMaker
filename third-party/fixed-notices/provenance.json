@@ -200,52 +200,52 @@
     "sha256": "b05fefdb9242269cf3cc95cfd44edf7fd6c6a5bff8249abe40073540737dfdbb"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
     "version": "0.9.0",
     "file": "LICENSE-APACHE",
     "crate": "cubecl-ir",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "9cff568488e9d56aae60f162404acdb15d8533a0202cf01f6eb0843b264f20ff"
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
     "version": "0.9.0",
     "file": "LICENSE-MIT",
     "crate": "cubecl-ir",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "94949dd83279f3ca3d0ce42ce0fc154d0ed817444454ee2925e903eec93949b6"
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
     "version": "0.9.0",
     "file": "LICENSE-APACHE",
     "crate": "cubecl-macros-internal",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "9cff568488e9d56aae60f162404acdb15d8533a0202cf01f6eb0843b264f20ff"
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
     "version": "0.9.0",
     "file": "LICENSE-MIT",
     "crate": "cubecl-macros-internal",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "94949dd83279f3ca3d0ce42ce0fc154d0ed817444454ee2925e903eec93949b6"
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
     "version": "0.9.0",
     "file": "LICENSE-APACHE",
     "crate": "cubecl-macros",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "9cff568488e9d56aae60f162404acdb15d8533a0202cf01f6eb0843b264f20ff"
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
     "version": "0.9.0",
     "file": "LICENSE-MIT",
     "crate": "cubecl-macros",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "94949dd83279f3ca3d0ce42ce0fc154d0ed817444454ee2925e903eec93949b6"
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
   },
   {
     "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
@@ -552,20 +552,20 @@
     "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-APACHE",
     "version": "0.38.0+1.3.296",
     "file": "LICENSE-APACHE",
     "crate": "tracel-ash",
     "revision": "1f2b476be67ed12f3cb61ef96c54c4aa4de14814",
-    "sha256": "154397a08d0cb342110281129971868cd562542d0780b0d10722788cd11a1399"
+    "sha256": "0e8a410375e1ee5c75c6198b08b534fec6e5edef766cf971bab4a404542636ab"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-MIT",
     "version": "0.38.0+1.3.296",
     "file": "LICENSE-MIT",
     "crate": "tracel-ash",
     "revision": "1f2b476be67ed12f3cb61ef96c54c4aa4de14814",
-    "sha256": "72af89a828df52a9dcc42512ed64663b3b8d7961dd7a5586d44478eede82bc7a"
+    "sha256": "c733ccf8ab25df175a63d9d844677b98e3a5ab8f8de1c1616087e6868a7f948e"
   },
   {
     "source": "crates.io package",
@@ -600,52 +600,52 @@
     "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE",
     "version": "26.0.1",
     "file": "LICENSE.APACHE",
     "crate": "wgpu-core",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "93322bf14207312d2ac79c0dc02f97f4592bc3c72d9e1a4f6012c21a0f6d816d"
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT",
     "version": "26.0.1",
     "file": "LICENSE.MIT",
     "crate": "wgpu-core",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "10b693f4060285108e21fbca779818813849a4bb52101b6ec0512e4b0750ba64"
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE",
     "version": "26.0.0",
     "file": "LICENSE.APACHE",
     "crate": "wgpu-types",
     "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
-    "sha256": "93322bf14207312d2ac79c0dc02f97f4592bc3c72d9e1a4f6012c21a0f6d816d"
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT",
     "version": "26.0.0",
     "file": "LICENSE.MIT",
     "crate": "wgpu-types",
     "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
-    "sha256": "10b693f4060285108e21fbca779818813849a4bb52101b6ec0512e4b0750ba64"
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE",
     "version": "26.0.1",
     "file": "LICENSE.APACHE",
     "crate": "wgpu",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "93322bf14207312d2ac79c0dc02f97f4592bc3c72d9e1a4f6012c21a0f6d816d"
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
   },
   {
-    "source": "crates.io package",
+    "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT",
     "version": "26.0.1",
     "file": "LICENSE.MIT",
     "crate": "wgpu",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "10b693f4060285108e21fbca779818813849a4bb52101b6ec0512e4b0750ba64"
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
   },
   {
     "source": "crates.io package",
@@ -881,5 +881,21 @@
     "crate": "realfft",
     "sha256": "d72ddbadf9bb55ed21ae973ac97f0bb4e8df2064af628c54b802b2c7d764c8de",
     "source": "https://github.com/HEnquist/realfft/blob/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6/Cargo.toml"
+  },
+  {
+    "sha256": "25c4576db4a90ddaddaf1b5cd83dc1a537e600041009f6ca71ec62d770ea4390",
+    "file": "LICENSE-TEXT.txt",
+    "crate": "realfft",
+    "source": "Supplemental standard license text; upstream declaration separately retained",
+    "version": "3.5.0",
+    "revision": "standard-text"
+  },
+  {
+    "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "file": "LICENSE-TEXT.txt",
+    "crate": "hexf-parse",
+    "source": "Supplemental standard license text; upstream declaration separately retained",
+    "version": "0.2.1",
+    "revision": "standard-text"
   }
 ]

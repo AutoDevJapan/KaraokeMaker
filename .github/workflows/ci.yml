@@ -44,6 +44,12 @@ jobs:
           $noticeText = Get-Content third-party/RUST-NOTICES.txt -Raw
           if ($noticeText -match '<year>|<copyright holders>|<owner>') { throw 'Unresolved generic copyright notice' }
           $provenance = Get-Content third-party/fixed-notices/provenance.json -Raw | ConvertFrom-Json
+          if (@($provenance).Count -eq 0) { throw 'Empty fixed-notice provenance' }
+          $expectedFiles = @($provenance | ForEach-Object { "$($_.crate)-$($_.version)/$($_.file)" } | Sort-Object -Unique)
+          if ($expectedFiles.Count -ne @($provenance).Count) { throw 'Duplicate fixed-notice provenance' }
+          $root = (Resolve-Path third-party/fixed-notices).Path
+          $actualFiles = @(Get-ChildItem $root -File -Recurse | Where-Object { $_.FullName -ne (Join-Path $root 'provenance.json') } | ForEach-Object { [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/') } | Sort-Object)
+          if (Compare-Object $expectedFiles $actualFiles) { throw 'Fixed-notice file set differs from provenance' }
           foreach ($entry in $provenance) {
             $source = Join-Path third-party/fixed-notices "$($entry.crate)-$($entry.version)/$($entry.file)"
             $bytes = [Text.Encoding]::UTF8.GetBytes(([IO.File]::ReadAllText((Resolve-Path $source))).Replace("`r`n", "`n"))
