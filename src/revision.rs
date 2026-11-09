@@ -297,6 +297,20 @@ mod timing_tests {
         assert!(TimingDraft::from_json(&invalid, 5.0).is_err());
     }
     #[test]
+    fn history_preserves_tempo_adjusted_duration_exactly() {
+        for tempo in [0.5, 0.8, 1.0, 1.2, 1.5] {
+            for micros in (1_000_001..300_000_000).step_by(7919) {
+                let duration = micros as f64 / 1_000_000.0 / tempo;
+                let draft =
+                    TimingDraft::from_lrc("[00:00.00]line\n[00:00.50]\n", duration).unwrap();
+                let json = draft.to_json().unwrap();
+                let reopened = TimingDraft::from_json(&json, duration).unwrap();
+                assert_eq!(reopened.duration.to_bits(), duration.to_bits());
+                assert_eq!(reopened.lrc().unwrap(), draft.lrc().unwrap());
+            }
+        }
+    }
+    #[test]
     fn corrupt_unsupported_or_excessive_history_cannot_be_restored() {
         let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
         draft.replace(vec![line(2.0, 3.0, "changed")]).unwrap();
