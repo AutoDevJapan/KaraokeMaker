@@ -234,6 +234,7 @@ fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientat
         horizontal_margin: 0.1,
         vertical_margin: 0.1,
         max_lines: lines,
+        placement: None,
     };
     let options = |preset, template| Options {
         title: "テンプレート".into(),
@@ -374,6 +375,7 @@ fn truncated_template_background_fails_quickly_instead_of_looping_forever() {
             horizontal_margin: 0.1,
             vertical_margin: 0.1,
             max_lines: 2,
+            placement: None,
         }),
         project: Some("客先A".into()),
         preset: VideoPreset::Hd,
@@ -407,6 +409,7 @@ fn convert_checks_the_template_line_limit_before_slow_work() {
         horizontal_margin: 0.1,
         vertical_margin: 0.1,
         max_lines: lines,
+        placement: None,
     };
     let long = "あ".repeat(60);
     let options = |template: Option<Template>| Options {
@@ -452,6 +455,7 @@ fn still_background_keeps_the_output_length_at_other_tempos() {
                 horizontal_margin: 0.1,
                 vertical_margin: 0.1,
                 max_lines: 2,
+                placement: None,
             }),
             project: Some("客先A".into()),
             preset: VideoPreset::Hd,
@@ -487,6 +491,7 @@ fn template_word_timed_subtitles_stay_inside_margins_and_respect_the_line_limit(
         horizontal_margin: 0.1,
         vertical_margin: 0.1,
         max_lines: lines,
+        placement: None,
     };
     let words: Vec<Word> = (0..10)
         .map(|i| Word {
@@ -1134,6 +1139,7 @@ fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() 
             horizontal_margin: 0.2,
             vertical_margin: 0.2,
             max_lines: 2,
+            placement: None,
         }),
         project: Some("客先A".into()),
         ..Options::default()
@@ -1183,6 +1189,199 @@ fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() 
     let ass = fs::read_to_string(revised_legacy.join("lyrics.ass")).unwrap();
     assert!(!ass.contains(",384,384,"));
 }
+
+#[test]
+fn saved_placement_renders_inside_boxes_and_outside_manual_avoid_area() {
+    use karaoke_maker::{
+        alignment::Word,
+        presentation::VideoPreset,
+        template::{Placement, Rect, Template},
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    for (preset, w, h) in [
+        (VideoPreset::FullHd, 1920usize, 1080usize),
+        (VideoPreset::Vertical, 1080, 1920),
+    ] {
+        for words in [false, true] {
+            let dir = temp.path().join(format!("{w}-{words}"));
+            fs::create_dir(&dir).unwrap();
+            let t = Template {
+                version: 1,
+                project: "test".into(),
+                style: Default::default(),
+                background_image: None,
+                logo: None,
+                horizontal_margin: 0.05,
+                vertical_margin: 0.05,
+                max_lines: 1,
+                placement: Some(Placement {
+                    title: Rect {
+                        x: 0.2,
+                        y: 0.15,
+                        width: 0.6,
+                        height: 0.15,
+                    },
+                    subtitles: Rect {
+                        x: 0.2,
+                        y: 0.6,
+                        width: 0.6,
+                        height: 0.2,
+                    },
+                    avoid: vec![Rect {
+                        x: 0.3,
+                        y: 0.35,
+                        width: 0.4,
+                        height: 0.2,
+                    }],
+                }),
+            };
+            let path = dir.join("template.json");
+            t.save_new(&path, "test").unwrap();
+            let options = Options {
+                title: "タイトル".into(),
+                lyrics: "[00:00.10]灯りの下で\n[00:00.90]\n".into(),
+                preset,
+                template: Some(Template::load(&path, "test").unwrap()),
+                project: Some("test".into()),
+                words: if words {
+                    vec![Word {
+                        text: "灯りの下で".into(),
+                        start: 0.1,
+                        end: 0.9,
+                        confidence: 1.0,
+                        join_previous: false,
+                        line_index: 0,
+                    }]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            };
+            media::render(&source, &dir, &options, &Progress::default()).unwrap();
+            let frame = media::hidden_command(Tools::discover().ffmpeg)
+                .args(["-v", "error", "-ss", "0.5", "-i"])
+                .arg(dir.join("karaoke.mp4"))
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ])
+                .output()
+                .unwrap();
+            assert!(frame.status.success());
+            let (mut title, mut lyrics, mut avoided, mut outside) = (0, 0, 0, 0);
+            for y in 0..h {
+                for x in 0..w {
+                    let i = (y * w + x) * 3;
+                    if frame.stdout[i + 1] < 200 {
+                        continue;
+                    }
+                    let (nx, ny) = (x as f64 / w as f64, y as f64 / h as f64);
+                    if (0.3..0.7).contains(&nx) && (0.35..0.55).contains(&ny) {
+                        avoided += 1
+                    }
+                    if (0.195..0.805).contains(&nx) && (0.145..0.305).contains(&ny) {
+                        title += 1
+                    } else if (0.195..0.805).contains(&nx) && (0.595..0.805).contains(&ny) {
+                        lyrics += 1
+                    } else {
+                        outside += 1
+                    }
+                }
+            }
+            assert!(
+                title > 20 && lyrics > 100,
+                "{w}/{words}: title={title} lyrics={lyrics}"
+            );
+            assert_eq!(avoided, 0, "{w}/{words}: avoid overlap");
+            assert_eq!(outside, 0, "{w}/{words}: outside saved boxes");
+        }
+    }
+}
+
+#[test]
+fn long_single_aligned_word_stays_inside_the_safe_frame() {
+    use karaoke_maker::{alignment::Word, presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    for (preset, w, h, left, right) in [
+        (
+            VideoPreset::FullHd,
+            1920usize,
+            1080usize,
+            192usize,
+            192usize,
+        ),
+        (VideoPreset::Vertical, 1080, 1920, 108, 160),
+    ] {
+        let t = Template {
+            version: 1,
+            project: "test".into(),
+            style: Default::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: 0.1,
+            vertical_margin: 0.1,
+            max_lines: 4,
+            placement: None,
+        };
+        let words = vec![Word {
+            text: "あいうえおかきくけこ".repeat(4),
+            start: 0.1,
+            end: 0.9,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        }];
+        let ass =
+            karaoke_maker::lyrics::make_ass_words("", &words, 1.0, 1.0, preset, &t.style, Some(&t))
+                .unwrap();
+        let dir = temp.path().join(w.to_string());
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("lyrics.ass"), ass).unwrap();
+        let frame = media::hidden_command(Tools::discover().ffmpeg)
+            .current_dir(&dir)
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg(format!("color=black:s={w}x{h}:r=30:d=1"))
+            .args([
+                "-vf",
+                "ass=lyrics.ass",
+                "-ss",
+                "0.5",
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(frame.status.success());
+        let (mut ink, mut outside) = (0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                if frame.stdout[(y * w + x) * 3 + 1] <= 200 {
+                    continue;
+                }
+                ink += 1;
+                if x + 4 < left || x > w - right + 4 {
+                    outside += 1
+                }
+            }
+        }
+        assert!(ink > 1000, "missing text {w}");
+        assert_eq!(outside, 0, "long word outside safe area {w}");
+    }
+}
+
 #[test]
 fn measured_multiline_word_highlights_later_lines_during_its_original_interval() {
     use karaoke_maker::{alignment::Word, presentation::VideoPreset, template::Template};
@@ -1200,6 +1399,7 @@ fn measured_multiline_word_highlights_later_lines_during_its_original_interval()
             horizontal_margin: 0.1,
             vertical_margin: 0.1,
             max_lines: 4,
+            placement: None,
         };
         let words = vec![Word {
             text: "あいうえおかきくけこ".repeat(4),
@@ -1276,4 +1476,72 @@ fn measured_multiline_word_highlights_later_lines_during_its_original_interval()
             "last line never highlighted {w}"
         );
     }
+}
+
+#[test]
+fn manual_avoid_area_rejects_a_logo_before_video_output() {
+    use karaoke_maker::{
+        presentation::VideoPreset,
+        template::{Placement, Rect, Template},
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let samples: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+    media::write_stereo(&source, &samples, &samples).unwrap();
+    let original = fs::read(&source).unwrap();
+    let logo = temp.path().join("logo.png");
+    solid_png(&logo, "200x200", "red");
+    let mut t = Template {
+        version: 1,
+        project: "test".into(),
+        style: Default::default(),
+        background_image: None,
+        logo: Some(logo),
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: 1,
+        placement: Some(Placement {
+            title: Rect {
+                x: 0.2,
+                y: 0.3,
+                width: 0.4,
+                height: 0.1,
+            },
+            subtitles: Rect {
+                x: 0.2,
+                y: 0.6,
+                width: 0.6,
+                height: 0.2,
+            },
+            avoid: vec![Rect {
+                x: 0.6,
+                y: 0.1,
+                width: 0.3,
+                height: 0.15,
+            }],
+        }),
+    };
+    let output = temp.path().join("refused");
+    fs::create_dir(&output).unwrap();
+    let mut options = Options {
+        title: "曲".into(),
+        lyrics: "[00:00.10]歌\n[00:00.90]\n".into(),
+        preset: VideoPreset::Vertical,
+        template: Some(t.clone()),
+        project: Some("test".into()),
+        ..Default::default()
+    };
+    let error = media::render(&source, &output, &options, &Progress::default()).unwrap_err();
+    assert!(error.to_string().contains("ロゴ枠が回避領域"), "{error:#}");
+    assert!(!output.join("karaoke.mp4").exists());
+    assert_eq!(fs::read(&source).unwrap(), original);
+    // The same logo remains at the same location when the manually specified avoid area is elsewhere.
+    t.placement.as_mut().unwrap().avoid = vec![Rect {
+        x: 0.2,
+        y: 0.45,
+        width: 0.2,
+        height: 0.1,
+    }];
+    options.template = Some(t);
+    assert!(media::check_lyrics_layout(&options, 1.0).is_ok());
 }
