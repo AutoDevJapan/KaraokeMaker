@@ -67,6 +67,12 @@ pub fn timed_lines_from_lrc(text: &str, duration: f64) -> Result<Vec<TimedLine>>
         "曲の長さが不正です。"
     );
     let cues = lyrics::parse_lrc(text)?;
+    let rounded_end = (duration * 100.0).round() / 100.0;
+    ensure!(
+        cues.iter().all(|cue| cue.seconds <= duration
+            || (cue.text.trim().is_empty() && cue.seconds == rounded_end)),
+        "曲の長さを超える歌詞の時刻があります。"
+    );
     let mut lines = Vec::new();
     for (index, cue) in cues.iter().enumerate() {
         if cue.text.trim().is_empty() {
@@ -280,6 +286,8 @@ mod timing_tests {
         assert_eq!(lines, vec![line(1.0, 2.0, "first"), line(3.0, 5.0, "last")]);
         assert_eq!(timed_lines_lrc(&lines, 5.0).unwrap(), input);
         assert!(timed_lines_from_lrc("[00:05.00]outside", 5.0).is_err());
+        assert!(timed_lines_from_lrc("[00:01.00]line\n[00:08.00]\n", 5.0).is_err());
+        assert!(timed_lines_from_lrc("[00:01.00]line\n[00:05.02]\n", 5.006).is_err());
     }
     #[test]
     fn rounded_adjacent_boundaries_do_not_merge_a_blank_into_lyrics() {
