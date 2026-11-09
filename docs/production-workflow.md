@@ -116,7 +116,7 @@ karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery
 
 `inspect-delivery` に `--settings ./edit/settings.json` を指定すると、設定のSHA-256とバイト数も記録する。`--delivery-method` は合意した受け渡し方法、`--volume-adjustment` は音量調整の有無と内容を記す文字列であり、アップロードや音量変更は行わない。省略時は未記録（null）のままで、推測で埋めない。
 
-同じ検査に `--manual-form ./delivery/manual.json` を指定して、PC内の編集用JSONを新規作成する。全編を確認した担当が `reviewer`・`reviewed_at`・`full_listening`・`full_visual_check`・`notes` を記入する。試聴・目視の結果は `pass` または `fail`。ハッシュとファイル一覧は変更しない。
+同じ検査に `--manual-form ./delivery/manual.json` を指定して、PC内の編集用JSONを新規作成する。手動フォームの作成と読戻しでは、実際に使った設定ファイルを `--settings` に指定することが必須。設定のない記録を有効な紐付けとして受理しない。手動記録を使わない自動検査では、従来どおり設定を省略できる。全編を確認した担当が `reviewer`・`reviewed_at`・`full_listening`・`full_visual_check`・`notes` を記入する。試聴・目視の結果は `pass` または `fail`。ハッシュとファイル一覧は変更しない。
 
 記入後、同じsource・settings・納品物を指定した検査に `--manual-review ./delivery/manual.json` を加えて、別名の検査JSONへ保存する。今回計算した原音・設定・全納品物のハッシュと完全一致しない記録、未記入の結果、確認者・日時が空の記録は拒否する。記入内容は `operator_review` に保持する。確認者名は自己申告で、認証済み署名ではない。`manual_review_complete` と自動検査の意味は変えず、人手の不合格も消さない。原音や納品物を変更したら再確認し、新しい記録を作る。記録には非公開の素材パスや担当名が含まれるので、Gitや公開Issueに追加しない。
 
