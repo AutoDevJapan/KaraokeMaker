@@ -376,6 +376,113 @@ fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() 
 }
 
 #[test]
+fn template_word_timed_subtitles_stay_inside_margins_and_respect_the_line_limit() {
+    use karaoke_maker::{alignment::Word, presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let background = temp.path().join("background.png");
+    solid_png(&background, "1280x720", "0x203060");
+    let template = |lines: u8| Template {
+        version: 1,
+        project: "客先A".into(),
+        style: Default::default(),
+        background_image: Some(background.clone()),
+        logo: None,
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: lines,
+    };
+    let words: Vec<Word> = (0..10)
+        .map(|i| Word {
+            text: "あいうえおか".into(),
+            start: 0.2 + i as f64 * 0.15,
+            end: 0.35 + i as f64 * 0.15,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        })
+        .collect();
+    let options = |preset, template| Options {
+        title: "語単位".into(),
+        preset,
+        words: words.clone(),
+        template: Some(template),
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    for (preset, width, height, margins) in [
+        (
+            VideoPreset::FullHd,
+            1920usize,
+            1080usize,
+            [192usize, 192, 108, 120],
+        ),
+        (VideoPreset::Vertical, 1080, 1920, [108, 160, 192, 320]),
+    ] {
+        let output = temp.path().join(format!("{width}"));
+        fs::create_dir(&output).unwrap();
+        media::render(
+            &source,
+            &output,
+            &options(preset, template(2)),
+            &Progress::default(),
+        )
+        .unwrap();
+        let frame = media::hidden_command(Tools::discover().ffmpeg)
+            .args(["-v", "error", "-ss", "0.6", "-i"])
+            .arg(output.join("karaoke.mp4"))
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(frame.status.success());
+        let [left, right, top, bottom] = margins;
+        let (mut inside, mut outside) = (0, 0);
+        for y in 0..height {
+            for x in 0..width {
+                let at = (y * width + x) * 3;
+                // Text is white or the light green fill; the background is dark blue.
+                if frame.stdout[at + 1] <= 200 {
+                    continue;
+                }
+                if x + 4 < left || x > width - right + 4 || y + 4 < top || y > height - bottom + 4 {
+                    outside += 1;
+                } else {
+                    inside += 1;
+                }
+            }
+        }
+        assert!(
+            inside > 2000,
+            "{width}: subtitle text is missing ({inside})"
+        );
+        assert_eq!(outside, 0, "{width}: text outside the saved margins");
+    }
+    let refused = temp.path().join("refused");
+    fs::create_dir(&refused).unwrap();
+    assert!(
+        media::render(
+            &source,
+            &refused,
+            &options(VideoPreset::Vertical, template(1)),
+            &Progress::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn loud_audio_keeps_headroom_after_wav_mp3_and_aac_export() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.wav");

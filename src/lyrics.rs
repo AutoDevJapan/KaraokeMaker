@@ -152,6 +152,14 @@ pub fn make_ass_words(
         previous = word.start;
     }
     let mut ass = ass_with_layout(title, &[], duration, tempo, preset, style, template)?;
+    // With a template, long lines are broken by estimated glyph width so they stay inside
+    // the margins (automatic wrapping is off); the line limit is enforced the same way.
+    let budget = template.map(|_| {
+        let (width, _) = preset.dimensions();
+        let (left, right, _, _) = layout_margins(preset, template);
+        let size = (44.0 * width as f64 / 1280.0).round();
+        width.saturating_sub(left + right) as f64 / (size * 1.1)
+    });
     let mut first = 0;
     while first < words.len() {
         let mut last = first + 1;
@@ -167,6 +175,8 @@ pub fn make_ass_words(
         let start = words[first].start / tempo;
         let end = words[last - 1].end.min(duration) / tempo;
         let mut text = String::new();
+        let mut used = 0.0;
+        let mut lines = 1;
         for (n, word) in words[first..last].iter().enumerate() {
             let next = words[first..last]
                 .get(n + 1)
@@ -178,7 +188,28 @@ pub fn make_ass_words(
             } else {
                 ""
             };
+            if let Some(budget) = budget {
+                let width: f64 = spacing.len() as f64 * 0.6
+                    + word
+                        .text
+                        .chars()
+                        .map(|c| if c.is_ascii() { 0.6 } else { 1.0 })
+                        .sum::<f64>();
+                if used + width > budget && used > 0.0 {
+                    text.push_str("\\N");
+                    used = 0.0;
+                    lines += 1;
+                }
+                used += width;
+            }
             text.push_str(&format!("{spacing}{{\\kf{fill}}}{}", ass_text(&word.text)));
+        }
+        if let Some(template) = template {
+            ensure!(
+                lines <= template.max_lines as usize,
+                "字幕が{}行を超えます。余白か行数を調整してください。",
+                template.max_lines
+            );
         }
         ass.push_str(&format!(
             "Dialogue: 1,{},{},Lyrics,,0,0,0,,{text}\n",
@@ -340,6 +371,39 @@ pub fn make_ass_templated(
     )
 }
 
+/// Left, right, bottom and top margins in pixels. A template can only widen the built-in
+/// platform safe area; its horizontal or vertical value follows the video orientation.
+fn layout_margins(
+    preset: VideoPreset,
+    template: Option<&crate::template::Template>,
+) -> (u32, u32, u32, u32) {
+    let (width, height) = preset.dimensions();
+    let scale = width as f64 / 1280.0;
+    let scaled = |value: f64| (value * scale).round() as u32;
+    let portrait = matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd);
+    let (mut left, mut right, mut bottom, mut top) = if portrait {
+        let factor = width as f64 / 1080.0;
+        let safe = |value: f64| (value * factor).round() as u32;
+        (safe(80.0), safe(160.0), safe(320.0), safe(160.0))
+    } else {
+        (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
+    };
+    if let Some(template) = template {
+        let margin = if portrait {
+            template.vertical_margin
+        } else {
+            template.horizontal_margin
+        };
+        let side = (margin * width as f64).round() as u32;
+        let edge = (margin * height as f64).round() as u32;
+        left = left.max(side);
+        right = right.max(side);
+        top = top.max(edge);
+        bottom = bottom.max(edge);
+    }
+    (left, right, bottom, top)
+}
+
 fn ass_with_layout(
     title: &str,
     cues: &[Cue],
@@ -354,37 +418,15 @@ fn ass_with_layout(
     let (width, height) = preset.dimensions();
     let scale = width as f64 / 1280.0;
     let scaled = |value: f64| (value * scale).round() as u32;
-    let portrait = matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd);
-    let (mut left, mut right, mut bottom, mut top) =
-        if matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd) {
-            let factor = width as f64 / 1080.0;
-            let safe = |value: f64| (value * factor).round() as u32;
-            (safe(80.0), safe(160.0), safe(320.0), safe(160.0))
-        } else {
-            (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
-        };
-    if let Some(template) = template {
-        // Never smaller than the built-in platform safe area; the template can only widen it.
-        let margin = if portrait {
-            template.vertical_margin
-        } else {
-            template.horizontal_margin
-        };
-        let side = (margin * width as f64).round() as u32;
-        let edge = (margin * height as f64).round() as u32;
-        left = left.max(side);
-        right = right.max(side);
-        top = top.max(edge);
-        bottom = bottom.max(edge);
-    }
+    let (left, right, bottom, top) = layout_margins(preset, template);
     let font = &style.font;
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
     let title_size = scaled(28.0);
     // With a template, lines are broken here by estimated glyph width (10% headroom) and
     // libass automatic wrapping is turned off, because its Japanese wrapping can exceed
-    // the margins. Word-timed subtitles keep libass wrapping.
-    let fixed_wrap = template.is_some() && !cues.is_empty();
+    // the margins. Word-timed subtitles are broken the same way in make_ass_words.
+    let fixed_wrap = template.is_some();
     let wrap_style = if fixed_wrap { 2 } else { 0 };
     let available = width.saturating_sub(left + right) as f64;
     let wrapped = |text: &str, size: u32| -> Vec<String> {
