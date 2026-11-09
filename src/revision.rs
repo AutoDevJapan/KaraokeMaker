@@ -187,19 +187,20 @@ pub fn timed_lines_lrc(lines: &[TimedLine], duration: f64) -> Result<String> {
 
 /// Missing history is distinct from unreadable, oversized or invalid history.
 pub fn load_history(dir: &Path, duration: f64) -> Result<Option<TimingDraft>> {
-    use std::io::Read;
     let file = match fs::File::open(dir.join("timing-history.json")) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
+    Ok(Some(read_history(file, duration)?))
+}
+
+fn read_history(reader: impl std::io::Read, duration: f64) -> Result<TimingDraft> {
+    use std::io::Read;
     let mut bytes = Vec::new();
-    file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    reader.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 16 * 1024 * 1024, "編集履歴が大きすぎます。");
-    Ok(Some(TimingDraft::from_json(
-        std::str::from_utf8(&bytes)?,
-        duration,
-    )?))
+    TimingDraft::from_json(std::str::from_utf8(&bytes)?, duration)
 }
 
 pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
@@ -328,6 +329,20 @@ pub fn render_revision(
 #[cfg(test)]
 mod timing_tests {
     use super::*;
+    #[test]
+    fn history_reader_accepts_limit_and_stops_after_one_excess_byte() {
+        const LIMIT: usize = 16 * 1024 * 1024;
+        let draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        let mut bytes = draft.to_json().unwrap().into_bytes();
+        bytes.resize(LIMIT, b' ');
+        let mut input = std::io::Cursor::new(&bytes);
+        assert!(read_history(&mut input, 5.0).is_ok());
+        assert_eq!(input.position(), LIMIT as u64);
+        bytes.extend_from_slice(b"  ");
+        let mut input = std::io::Cursor::new(&bytes);
+        assert!(read_history(&mut input, 5.0).is_err());
+        assert_eq!(input.position(), LIMIT as u64 + 1);
+    }
     #[test]
     fn history_cleanup_failure_retains_original_error_and_remaining_path() {
         let path = Path::new("remaining-history.tmp");
