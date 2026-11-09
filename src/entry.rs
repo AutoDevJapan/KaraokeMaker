@@ -44,6 +44,11 @@ enum Mode {
         /// JSON with background/accent RGB colors and an installed font name.
         #[arg(long)]
         style: Option<PathBuf>,
+        /// Saved project template JSON; requires --project.
+        #[arg(long, requires = "project")]
+        template: Option<PathBuf>,
+        #[arg(long)]
+        project: Option<String>,
         #[arg(long,value_enum,default_value_t=crate::model::SeparationModel::MelBandFp16)]
         separation: crate::model::SeparationModel,
         #[arg(long)]
@@ -64,6 +69,10 @@ enum Mode {
         preset: VideoPreset,
         #[arg(long)]
         style: Option<PathBuf>,
+        #[arg(long, requires = "project")]
+        template: Option<PathBuf>,
+        #[arg(long)]
+        project: Option<String>,
         #[arg(long)]
         background: bool,
         #[arg(long)]
@@ -306,6 +315,8 @@ fn run() -> Result<()> {
             background,
             preset,
             style,
+            template,
+            project,
             separation,
             words,
             no_subtitles,
@@ -324,6 +335,8 @@ fn run() -> Result<()> {
                 original_video: !background,
                 preset,
                 style: read_style(style)?,
+                template: read_template(template, project.as_deref())?,
+                project,
                 separation,
                 sample_rate: 48000,
                 words: words
@@ -332,6 +345,11 @@ fn run() -> Result<()> {
                     .unwrap_or_default(),
                 automatic_subtitles: !no_subtitles,
             };
+            if options.template.is_some() {
+                eprintln!(
+                    "字幕の幅と配置を計測します。初回は歌詞の量により数分かかることがあります。"
+                );
+            }
             media::convert(
                 &input,
                 &dir,
@@ -348,6 +366,8 @@ fn run() -> Result<()> {
             lyrics,
             preset,
             style,
+            template,
+            project,
             background,
             words,
         } => {
@@ -357,6 +377,8 @@ fn run() -> Result<()> {
                 original_video: !background,
                 preset,
                 style: read_style(style)?,
+                template: read_template(template, project.as_deref())?,
+                project,
                 words: words
                     .map(|p| -> Result<_> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
                     .transpose()?
@@ -367,6 +389,11 @@ fn run() -> Result<()> {
             fs::create_dir_all(&output)?;
             let dir = output.join(uuid::Uuid::new_v4().to_string());
             fs::create_dir(&dir)?;
+            if options.template.is_some() {
+                eprintln!(
+                    "字幕の幅と配置を計測します。初回は歌詞の量により数分かかることがあります。"
+                );
+            }
             media::render(&input, &dir, &options, &Progress::default())?;
             println!("{}", dir.canonicalize()?.display());
         }
@@ -435,6 +462,14 @@ fn run() -> Result<()> {
     }
     Ok(())
 }
+fn read_template(
+    path: Option<PathBuf>,
+    project: Option<&str>,
+) -> Result<Option<crate::template::Template>> {
+    path.map(|path| crate::template::Template::load(&path, project.unwrap_or_default()))
+        .transpose()
+}
+
 fn read_style(path: Option<PathBuf>) -> Result<VisualStyle> {
     let style = path
         .map(|p| -> Result<VisualStyle> { Ok(serde_json::from_slice(&fs::read(p)?)?) })

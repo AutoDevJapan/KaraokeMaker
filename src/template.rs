@@ -45,6 +45,30 @@ impl Template {
                 path.is_absolute() && path.is_file(),
                 "素材の絶対パスを確認してください。"
             );
+            // Only PNG or JPEG files by name and by file signature, so a renamed playlist
+            // or video is refused before ffmpeg opens it. This is not a full image check:
+            // ffmpeg is also told to read the file as a still image (-f image2).
+            let extension = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            ensure!(
+                matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg")),
+                "素材はPNGまたはJPEGの画像にしてください。"
+            );
+            let mut head = [0u8; 8];
+            let read = fs::File::open(path)
+                .and_then(|mut file| std::io::Read::read(&mut file, &mut head))?;
+            let png = head[..read].starts_with(b"\x89PNG\r\n\x1a\n");
+            let jpeg = head[..read].starts_with(&[0xff, 0xd8, 0xff]);
+            ensure!(
+                if extension.as_deref() == Some("png") {
+                    png
+                } else {
+                    jpeg
+                },
+                "素材の拡張子と中身（PNGかJPEG）が一致しません。"
+            );
         }
         Ok(())
     }
@@ -174,5 +198,42 @@ mod tests {
         value = template();
         value.logo = Some(dir.path().join("missing.png"));
         assert!(value.validate("project-a").is_err());
+    }
+    #[test]
+    fn only_png_or_jpeg_files_are_accepted_as_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = template();
+        for (name, accepted) in [
+            ("logo.png", true),
+            ("logo.JPG", true),
+            ("list.m3u8", false),
+            ("movie.mp4", false),
+            ("noext", false),
+        ] {
+            let path = dir.path().join(name);
+            let content: &[u8] = if name.to_ascii_lowercase().ends_with("png") {
+                b"\x89PNG\r\n\x1a\nrest"
+            } else {
+                &[0xff, 0xd8, 0xff, 0xe0, 0, 0]
+            };
+            fs::write(&path, content).unwrap();
+            value.logo = Some(path);
+            assert_eq!(value.validate("project-a").is_ok(), accepted, "{name}");
+        }
+        // A playlist renamed to .png is refused by its content.
+        let fake = dir.path().join("playlist.png");
+        fs::write(&fake, b"#EXTM3U\nhttp://example.invalid/a.ts\n").unwrap();
+        value.logo = Some(fake);
+        assert!(value.validate("project-a").is_err());
+        // A JPEG named .png and a PNG named .jpg are refused: the name must match the content.
+        for (name, content) in [
+            ("jpeg-as.png", &[0xffu8, 0xd8, 0xff, 0xe0, 0, 0][..]),
+            ("png-as.jpg", &b"\x89PNG\r\n\x1a\nrest"[..]),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, content).unwrap();
+            value.logo = Some(path);
+            assert!(value.validate("project-a").is_err(), "{name}");
+        }
     }
 }

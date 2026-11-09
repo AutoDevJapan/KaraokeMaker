@@ -295,6 +295,8 @@ pub fn render_revision(
         lyrics: text.into(),
         preset,
         style: previous.style.clone(),
+        template: previous.template.clone(),
+        project: previous.project.clone(),
         sample_rate: previous.sample_rate,
         original_video: false,
         ..Options::default()

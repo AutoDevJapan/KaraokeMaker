@@ -114,6 +114,80 @@ fn ass_text(text: &str) -> String {
     subtitle_text(text).replace('\n', "\\N")
 }
 
+// Escaping display fragments must not remove spaces (a fragment can be a space).
+fn ass_fragment(text: &str) -> String {
+    text.replace('\\', "＼")
+        .replace('{', "｛")
+        .replace('}', "｝")
+        .replace('<', "＜")
+        .replace('>', "＞")
+        .replace('\r', "")
+        .replace('\n', "\\N")
+}
+
+fn measured_lines(
+    text: &str,
+    font: &str,
+    size: u32,
+    outline: u32,
+    width: u32,
+) -> Result<Vec<String>> {
+    measured_lines_styled(text, font, size, outline, true, width)
+}
+
+fn measured_lines_styled(
+    text: &str,
+    font: &str,
+    size: u32,
+    outline: u32,
+    bold: bool,
+    width: u32,
+) -> Result<Vec<String>> {
+    let mut result = Vec::new();
+    for line in text.split('\n') {
+        let clusters = glyph_clusters(line);
+        let mut start = 0;
+        if clusters.is_empty() {
+            result.push(String::new());
+        }
+        while start < clusters.len() {
+            let (mut low, mut high) = (start + 1, clusters.len() + 1);
+            ensure!(
+                crate::ass_layout::measure_styled(font, size, outline, bold, &clusters[start])?.0
+                    <= width,
+                "字幕の1文字が指定幅に収まりません。"
+            );
+            while low + 1 < high {
+                let mid = (low + high) / 2;
+                if crate::ass_layout::measure_styled(
+                    font,
+                    size,
+                    outline,
+                    bold,
+                    &clusters[start..mid].concat(),
+                )?
+                .0 <= width
+                {
+                    low = mid
+                } else {
+                    high = mid
+                }
+            }
+            if low < clusters.len()
+                && clusters[low - 1].chars().all(|c| c.is_ascii_alphanumeric())
+                && clusters[low].chars().all(|c| c.is_ascii_alphanumeric())
+                && let Some(space) = (start..low).rev().find(|&i| clusters[i] == " ")
+                && space > start
+            {
+                low = space + 1;
+            }
+            result.push(clusters[start..low].concat());
+            start = low;
+        }
+    }
+    Ok(result)
+}
+
 fn stamp(seconds: f64) -> String {
     let cs = (seconds.max(0.0) * 100.0).round() as u64;
     format!(
@@ -132,6 +206,7 @@ pub fn make_ass_words(
     tempo: f64,
     preset: VideoPreset,
     style: &VisualStyle,
+    template: Option<&crate::template::Template>,
 ) -> Result<String> {
     ensure!(
         !words.is_empty() && words.len() <= 10000,
@@ -150,7 +225,14 @@ pub fn make_ass_words(
         );
         previous = word.start;
     }
-    let mut ass = make_ass_styled(title, &[], duration, tempo, preset, style)?;
+    let mut ass = ass_with_layout(title, &[], duration, tempo, preset, style, template)?;
+    // With a template, long lines are broken by renderer-measured width so they stay inside
+    // the margins (automatic wrapping is off); the line limit is enforced the same way.
+    let budget = template.map(|_| {
+        let (width, _) = preset.dimensions();
+        let (left, right, _, _) = layout_margins(preset, template);
+        width.saturating_sub(left + right)
+    });
     let mut first = 0;
     while first < words.len() {
         let mut last = first + 1;
@@ -166,6 +248,8 @@ pub fn make_ass_words(
         let start = words[first].start / tempo;
         let end = words[last - 1].end.min(duration) / tempo;
         let mut text = String::new();
+        let mut rendered_line = String::new();
+        let mut lines = 1;
         for (n, word) in words[first..last].iter().enumerate() {
             let next = words[first..last]
                 .get(n + 1)
@@ -177,7 +261,54 @@ pub fn make_ass_words(
             } else {
                 ""
             };
+            if let Some(budget) = budget {
+                let size = (44.0 * preset.dimensions().0 as f64 / 1280.0).round() as u32;
+                let outline = (3.0 * preset.dimensions().0 as f64 / 1280.0).round() as u32;
+                let candidate = format!("{rendered_line}{spacing}{}", word.text);
+                if !rendered_line.is_empty()
+                    && crate::ass_layout::measure(&style.font, size, outline, &candidate)?.0
+                        > budget
+                {
+                    text.push_str("\\N");
+                    lines += 1;
+                    rendered_line.clear();
+                }
+                let fragments = measured_lines(&word.text, &style.font, size, outline, budget)?;
+                let weights = fragments
+                    .iter()
+                    .map(|part| {
+                        crate::ass_layout::measure(&style.font, size, outline, part)
+                            .map(|m| u64::from(m.0.max(1)))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let total: u64 = weights.iter().sum();
+                let mut consumed = 0u64;
+                for (i, part) in fragments.iter().enumerate() {
+                    if i > 0 {
+                        text.push_str("\\N");
+                        lines += 1;
+                        rendered_line.clear();
+                    }
+                    let next = consumed + weights[i];
+                    let part_fill = fill * next / total - fill * consumed / total;
+                    if i == 0 {
+                        text.push_str(spacing);
+                        rendered_line.push_str(spacing);
+                    }
+                    text.push_str(&format!("{{\\kf{part_fill}}}{}", ass_fragment(part)));
+                    rendered_line.push_str(part);
+                    consumed = next;
+                }
+                continue;
+            }
             text.push_str(&format!("{spacing}{{\\kf{fill}}}{}", ass_text(&word.text)));
+        }
+        if let Some(template) = template {
+            ensure!(
+                lines <= template.max_lines as usize,
+                "字幕が{}行を超えます。余白か行数を調整してください。",
+                template.max_lines
+            );
         }
         ass.push_str(&format!(
             "Dialogue: 1,{},{},Lyrics,,0,0,0,,{text}\n",
@@ -257,6 +388,46 @@ pub fn to_lrc(cues: &[Cue]) -> String {
         .collect()
 }
 
+/// A glyph cluster that must not be split: a base character with its combining marks,
+/// a ZWJ sequence, or a pair of regional indicators. Closing punctuation joins the cluster
+/// before it so that a line never starts with it.
+fn glyph_clusters(line: &str) -> Vec<String> {
+    let mut clusters: Vec<String> = Vec::new();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        let closing = "。、，．,.）)」』】〕〉》！？!?:;；：…‥";
+        if closing.contains(c) && !clusters.is_empty() {
+            let last = clusters.last_mut().unwrap();
+            last.push(c);
+            continue;
+        }
+        let mut text = c.to_string();
+        let regional = ('\u{1F1E6}'..='\u{1F1FF}').contains(&c);
+        if regional
+            && chars
+                .peek()
+                .is_some_and(|n| ('\u{1F1E6}'..='\u{1F1FF}').contains(n))
+        {
+            text.push(chars.next().unwrap());
+        }
+        while let Some(&next) = chars.peek() {
+            let mark = matches!(next, '\u{0300}'..='\u{036F}' | '\u{3099}' | '\u{309A}' | '\u{FE00}'..='\u{FE0F}' | '\u{1F3FB}'..='\u{1F3FF}' | '\u{200D}');
+            if !mark {
+                break;
+            }
+            text.push(next);
+            chars.next();
+            if next == '\u{200D}'
+                && let Some(joined) = chars.next()
+            {
+                text.push(joined);
+            }
+        }
+        clusters.push(text);
+    }
+    clusters
+}
+
 pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
     make_ass_styled(
         title,
@@ -295,34 +466,134 @@ pub fn make_ass_styled(
     preset: VideoPreset,
     style: &VisualStyle,
 ) -> Result<String> {
+    ass_with_layout(title, cues, duration, tempo, preset, style, None)
+}
+
+/// Subtitles laid out with a saved project template: margins by orientation and a line limit.
+pub fn make_ass_templated(
+    title: &str,
+    cues: &[Cue],
+    duration: f64,
+    tempo: f64,
+    preset: VideoPreset,
+    template: &crate::template::Template,
+) -> Result<String> {
+    template.validate(&template.project)?;
+    ass_with_layout(
+        title,
+        cues,
+        duration,
+        tempo,
+        preset,
+        &template.style,
+        Some(template),
+    )
+}
+
+/// Left, right, bottom and top margins in pixels. A template can only widen the built-in
+/// platform safe area; its horizontal or vertical value follows the video orientation.
+pub(crate) fn layout_margins(
+    preset: VideoPreset,
+    template: Option<&crate::template::Template>,
+) -> (u32, u32, u32, u32) {
+    let (width, height) = preset.dimensions();
+    let scale = width as f64 / 1280.0;
+    let scaled = |value: f64| (value * scale).round() as u32;
+    let portrait = matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd);
+    let (mut left, mut right, mut bottom, mut top) = if portrait {
+        let factor = width as f64 / 1080.0;
+        let safe = |value: f64| (value * factor).round() as u32;
+        (safe(80.0), safe(160.0), safe(320.0), safe(160.0))
+    } else {
+        (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
+    };
+    if let Some(template) = template {
+        let margin = if portrait {
+            template.vertical_margin
+        } else {
+            template.horizontal_margin
+        };
+        let side = (margin * width as f64).round() as u32;
+        let edge = (margin * height as f64).round() as u32;
+        left = left.max(side);
+        right = right.max(side);
+        top = top.max(edge);
+        bottom = bottom.max(edge);
+    }
+    (left, right, bottom, top)
+}
+
+fn ass_with_layout(
+    title: &str,
+    cues: &[Cue],
+    duration: f64,
+    tempo: f64,
+    preset: VideoPreset,
+    style: &VisualStyle,
+    template: Option<&crate::template::Template>,
+) -> Result<String> {
     validate_timeline(cues, duration, tempo)?;
     style.validate()?;
     let (width, height) = preset.dimensions();
     let scale = width as f64 / 1280.0;
     let scaled = |value: f64| (value * scale).round() as u32;
-    let (left, right, bottom, top) =
-        if matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd) {
-            let factor = width as f64 / 1080.0;
-            let safe = |value: f64| (value * factor).round() as u32;
-            (safe(80.0), safe(160.0), safe(320.0), safe(160.0))
-        } else {
-            (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
-        };
+    let (left, right, bottom, top) = layout_margins(preset, template);
     let font = &style.font;
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
     let title_size = scaled(28.0);
+    // With a template, lines are broken using the selected renderer/font's measured width and
+    // libass automatic wrapping is turned off, because its Japanese wrapping can exceed
+    // the margins. Word-timed subtitles are broken the same way in make_ass_words.
+    let fixed_wrap = template.is_some();
+    let wrap_style = if fixed_wrap { 2 } else { 0 };
+    let available = width.saturating_sub(left + right) as f64;
+    let logo_reserve = if template.is_some_and(|t| t.logo.is_some()) {
+        // Room kept free on both sides of the title for a logo of up to a quarter of the width.
+        (available * 0.25).round() as u32 + scaled(16.0)
+    } else {
+        0
+    };
+    let (title_left, title_right) = (left + logo_reserve, right + logo_reserve);
+    let title_available = width.saturating_sub(title_left + title_right) as f64;
+    let wrapped = |text: &str, size: u32, available: f64| -> Result<Vec<String>> {
+        if fixed_wrap {
+            measured_lines_styled(
+                text,
+                font,
+                size,
+                if size == title_size {
+                    scaled(2.0)
+                } else {
+                    scaled(3.0)
+                },
+                size != title_size,
+                available as u32,
+            )
+        } else {
+            Ok(vec![text.to_string()])
+        }
+    };
+    if let (Some(template), true) = (template, fixed_wrap) {
+        for cue in cues {
+            ensure!(
+                wrapped(&cue.text, lyric_size, available)?.len() <= template.max_lines as usize,
+                "字幕が{}行を超えます。余白か行数を調整してください。",
+                template.max_lines
+            );
+        }
+    }
     let outline = scaled(3.0);
     let title_outline = scaled(2.0);
     let shadow = scaled(1.0);
     // libass rasterizes the vector glyphs after scaling the video to the target size.
     let mut ass = format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{left},{right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: {wrap_style}\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{title_left},{title_right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     );
     ass.push_str(&format!(
         "Dialogue: 0,0:00:00.00,{},Title,,0,0,0,,{}\n",
         stamp(duration / tempo),
-        ass_text(title)
+        ass_text(&wrapped(title, title_size, title_available)?.join("\n"))
     ));
     for (index, cue) in cues.iter().enumerate() {
         let end = cues
@@ -337,7 +608,7 @@ pub fn make_ass_styled(
             "Dialogue: 1,{},{},Lyrics,,0,0,0,,{{\\kf{fill}}}{}\n",
             stamp(cue.seconds / tempo),
             stamp(end / tempo),
-            ass_text(&cue.text)
+            ass_text(&wrapped(&cue.text, lyric_size, available)?.join("\n"))
         ));
     }
     Ok(ass)
@@ -380,6 +651,215 @@ pub fn make_srt(cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn measured_word_layout_accepts_existing_fit_and_preserves_spaces_and_modifiers() {
+        let mut t = template(0.1, 0.1, 1);
+        let word = |text: String| {
+            vec![crate::alignment::Word {
+                text,
+                start: 0.1,
+                end: 0.9,
+                confidence: 1.0,
+                join_previous: false,
+                line_index: 0,
+            }]
+        };
+        let fitting = "あいうえおかきくけこ".repeat(2) + "あいうえお";
+        for preset in [VideoPreset::FullHd, VideoPreset::Vertical] {
+            assert!(
+                make_ass_words(
+                    "",
+                    &word(fitting.clone()),
+                    1.0,
+                    1.0,
+                    preset,
+                    &t.style,
+                    Some(&t)
+                )
+                .is_ok()
+            );
+        }
+        t.max_lines = 4;
+        let english = " hello world this is a long synthetic phrase for karaoke ".repeat(3);
+        let ass = make_ass_words(
+            "",
+            &word(english.clone()),
+            1.0,
+            1.0,
+            VideoPreset::FullHd,
+            &t.style,
+            Some(&t),
+        )
+        .unwrap();
+        let line = ass.lines().find(|l| l.starts_with("Dialogue: 1")).unwrap();
+        assert!(
+            line.contains("\\N"),
+            "the space-preservation fixture must exercise actual wrapping"
+        );
+        let payload = line.splitn(10, ',').nth(9).unwrap();
+        let mut plain = String::new();
+        let mut tag = false;
+        for c in payload.chars() {
+            if c == '{' {
+                tag = true
+            } else if c == '}' {
+                tag = false
+            } else if !tag {
+                plain.push(c)
+            }
+        }
+        assert_eq!(plain.replace("\\N", ""), english);
+        let clusters = glyph_clusters(&"👍🏽".repeat(20));
+        assert_eq!(clusters.len(), 20);
+        assert!(clusters.iter().all(|c| c == "👍🏽"));
+    }
+
+    #[test]
+    fn long_single_word_wraps_without_changing_its_timing() {
+        let mut t = template(0.1, 0.1, 4);
+        let words = vec![crate::alignment::Word {
+            text: "あいうえおかきくけこ".repeat(4),
+            start: 0.1,
+            end: 0.9,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        }];
+        for preset in [VideoPreset::FullHd, VideoPreset::Vertical] {
+            let ass = make_ass_words("曲", &words, 1.0, 1.0, preset, &t.style, Some(&t)).unwrap();
+            let line = ass.lines().find(|l| l.starts_with("Dialogue: 1")).unwrap();
+            assert!(line.contains("\\N"));
+            assert!(line.matches("\\kf").count() > 1);
+            let sum: u64 = line
+                .split("\\kf")
+                .skip(1)
+                .map(|tag| {
+                    tag.chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect::<String>()
+                        .parse::<u64>()
+                        .unwrap()
+                })
+                .sum();
+            assert_eq!(
+                sum, 80,
+                "display fragment durations must sum to the original word interval"
+            );
+            assert!(line.contains("0:00:00.10,0:00:00.90"));
+            t.max_lines = 1;
+            assert!(make_ass_words("曲", &words, 1.0, 1.0, preset, &t.style, Some(&t)).is_err());
+            t.max_lines = 4;
+        }
+    }
+    #[test]
+    fn convert_preflight_checks_actual_words_instead_of_unused_lrc() {
+        let mut t = template(0.1, 0.1, 1);
+        let mut options = crate::media::Options {
+            lyrics: format!("[00:00.10]{}\n", "あ".repeat(40)),
+            words: (0..4)
+                .map(|i| crate::alignment::Word {
+                    text: "あ".repeat(10),
+                    start: 0.1 + i as f64 * 0.2,
+                    end: 0.3 + i as f64 * 0.2,
+                    confidence: 1.0,
+                    join_previous: false,
+                    line_index: i,
+                })
+                .collect(),
+            project: Some(t.project.clone()),
+            template: Some(t.clone()),
+            ..Default::default()
+        };
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_ok());
+        options.words.truncate(1);
+        options.words[0].text = "あ".repeat(40);
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_err());
+        t.max_lines = 4;
+        options.template = Some(t);
+        assert!(crate::media::check_lyrics_layout(&options, 1.0).is_ok());
+    }
+    fn template(horizontal: f64, vertical: f64, max_lines: u8) -> crate::template::Template {
+        crate::template::Template {
+            version: 1,
+            project: "客先A".into(),
+            style: VisualStyle::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: horizontal,
+            vertical_margin: vertical,
+            max_lines,
+        }
+    }
+    fn lyric_margins(ass: &str) -> Vec<u32> {
+        let style = ass
+            .lines()
+            .find(|l| l.starts_with("Style: Lyrics"))
+            .unwrap();
+        let f: Vec<&str> = style.split(',').collect();
+        f[19..22].iter().map(|v| v.parse().unwrap()).collect()
+    }
+    #[test]
+    fn title_keeps_clear_of_the_logo_corner() {
+        let dir = tempfile::tempdir().unwrap();
+        let logo = dir.path().join("logo.png");
+        std::fs::write(&logo, b"\x89PNG\r\n\x1a\nrest").unwrap();
+        let cues = parse_lrc("[00:01.00]歌\n[00:02.00]\n").unwrap();
+        let mut t = template(0.1, 0.1, 2);
+        let plain = make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &t).unwrap();
+        t.logo = Some(logo);
+        let with_logo =
+            make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &t).unwrap();
+        let title_margins = |ass: &str| -> Vec<u32> {
+            let style = ass.lines().find(|l| l.starts_with("Style: Title")).unwrap();
+            let f: Vec<&str> = style.split(',').collect();
+            f[19..22].iter().map(|v| v.parse().unwrap()).collect()
+        };
+        // Both sides give up a quarter of the safe width plus a gap, so the centred title
+        // can never reach a logo of up to that width in the top-right corner.
+        let (a, b) = (title_margins(&plain), title_margins(&with_logo));
+        assert!(b[0] >= a[0] + 150 && b[1] >= a[1] + 150, "{a:?} {b:?}");
+        assert_eq!(b[2], a[2]);
+    }
+    #[test]
+    fn template_margins_apply_per_orientation_and_never_shrink_safe_area() {
+        let cues = parse_lrc("[00:01.00]歌\n[00:02.00]\n").unwrap();
+        let t = template(0.2, 0.1, 2);
+        let wide = make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::FullHd, &t).unwrap();
+        assert_eq!(lyric_margins(&wide), vec![384, 384, 216]);
+        let tall = make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &t).unwrap();
+        assert_eq!(lyric_margins(&tall), vec![108, 160, 320]);
+        let small = template(0.0, 0.0, 2);
+        let base =
+            make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &small).unwrap();
+        assert_eq!(lyric_margins(&base), vec![80, 160, 320]);
+    }
+    #[test]
+    fn template_rejects_subtitles_that_would_need_more_lines_than_allowed() {
+        let long = "あ".repeat(60);
+        let cues = parse_lrc(&format!("[00:01.00]{long}\n[00:02.00]\n")).unwrap();
+        assert!(
+            make_ass_templated(
+                "曲",
+                &cues,
+                3.0,
+                1.0,
+                VideoPreset::Hd,
+                &template(0.05, 0.05, 1)
+            )
+            .is_err()
+        );
+        assert!(
+            make_ass_templated(
+                "曲",
+                &cues,
+                3.0,
+                1.0,
+                VideoPreset::Hd,
+                &template(0.05, 0.05, 3)
+            )
+            .is_ok()
+        );
+    }
     #[test]
     fn blank_at_song_end_is_editable_and_does_not_extend_srt() {
         let cues = parse_lrc("[00:01.00]end\n[00:10.00]\n").unwrap();

@@ -5,6 +5,75 @@ use karaoke_maker::{
 use std::fs;
 
 #[test]
+fn cli_template_measurement_notice_is_visible_and_stdout_remains_a_result_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let samples: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+    media::write_stereo(&source, &samples, &samples).unwrap();
+    let lrc = temp.path().join("lyrics.lrc");
+    let template = temp.path().join("template.json");
+    fs::write(
+        &template,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "project": "fixture", "style": {
+                "background": "142e27", "accent": "ceffa4", "font": "Yu Gothic"
+            }, "background_image": null, "logo": null,
+            "horizontal_margin": 0.1, "vertical_margin": 0.1, "max_lines": 1
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let run = || {
+        media::hidden_command(env!("CARGO_BIN_EXE_karaoke-maker-cli"))
+            .arg("--data")
+            .arg(temp.path().join("data"))
+            .arg("render")
+            .arg(&source)
+            .arg("--output")
+            .arg(temp.path().join("out"))
+            .arg("--lyrics")
+            .arg(&lrc)
+            .arg("--template")
+            .arg(&template)
+            .args([
+                "--title",
+                "fixture",
+                "--project",
+                "fixture",
+                "--preset",
+                "hd",
+                "--background",
+            ])
+            .output()
+            .unwrap()
+    };
+    fs::write(&lrc, "[00:00.10]one\n[00:00.10]two\n[00:00.80]\n").unwrap();
+    let rejected = run();
+    assert!(!rejected.status.success());
+    let error = String::from_utf8_lossy(&rejected.stderr);
+    assert!(error.contains("1行"), "unexpected rejection: {error}");
+    assert!(
+        error.contains("字幕の幅と配置"),
+        "measurement notice is absent: {error}"
+    );
+    assert!(rejected.stdout.is_empty());
+    fs::write(&lrc, "[00:00.10]one\n[00:00.80]\n").unwrap();
+    let accepted = run();
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    assert!(String::from_utf8_lossy(&accepted.stderr).contains("字幕の幅と配置"));
+    let output = String::from_utf8(accepted.stdout).unwrap();
+    let output = std::path::Path::new(output.trim());
+    assert_eq!(
+        fs::read_to_string(output.join("lyrics.lrc")).unwrap(),
+        fs::read_to_string(lrc).unwrap()
+    );
+}
+
+#[test]
 fn render_preserves_48khz_high_band_and_source() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.wav");
@@ -129,6 +198,375 @@ fn word_timing_burns_visible_subtitles_and_exports_48khz_audio() {
             .count()
             > 500
     );
+}
+
+fn solid_png(path: &std::path::Path, size: &str, color: &str) {
+    let status = media::hidden_command(Tools::discover().ffmpeg)
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!("color=c={color}:s={size}"))
+        .args(["-frames:v", "1"])
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientations() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    // Self-made flat fixtures: a blue background and a red logo.
+    let background = temp.path().join("background.png");
+    let logo = temp.path().join("logo.png");
+    solid_png(&background, "1280x720", "0x203060");
+    solid_png(&logo, "200x200", "0xc02020");
+    let template = |lines: u8| Template {
+        version: 1,
+        project: "客先A".into(),
+        style: Default::default(),
+        background_image: Some(background.clone()),
+        logo: Some(logo.clone()),
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: lines,
+    };
+    let options = |preset, template| Options {
+        title: "テンプレート".into(),
+        preset,
+        lyrics:
+            "[00:00.20]吾輩は猫である名前はまだ無いどこで生れたかとんと見当がつかぬ\n[00:01.80]\n"
+                .into(),
+        template: Some(template),
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    for (preset, width, height, margins) in [
+        // left, right, top, bottom in pixels, from the saved margin and the platform safe area.
+        (
+            VideoPreset::FullHd,
+            1920usize,
+            1080usize,
+            [192usize, 192, 108, 120],
+        ),
+        (VideoPreset::Vertical, 1080, 1920, [108, 160, 192, 320]),
+    ] {
+        let output = temp.path().join(format!("{width}"));
+        fs::create_dir(&output).unwrap();
+        media::render(
+            &source,
+            &output,
+            &options(preset, template(2)),
+            &Progress::default(),
+        )
+        .unwrap();
+        let frame = media::hidden_command(Tools::discover().ffmpeg)
+            .args(["-v", "error", "-ss", "0.8", "-i"])
+            .arg(output.join("karaoke.mp4"))
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(frame.status.success());
+        assert_eq!(frame.stdout.len(), width * height * 3);
+        let bright = |x: usize, y: usize| {
+            let at = (y * width + x) * 3;
+            frame.stdout[at..at + 3].iter().all(|&v| v > 200)
+        };
+        let [left, right, top, bottom] = margins;
+        let mut inside = 0;
+        let mut outside = 0;
+        let mut spots = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                if !bright(x, y) {
+                    continue;
+                }
+                if x + 4 < left || x > width - right + 4 || y + 4 < top || y > height - bottom + 4 {
+                    outside += 1;
+                    spots.push((x, y));
+                } else {
+                    inside += 1;
+                }
+            }
+        }
+        assert!(
+            inside > 2000,
+            "{width}: subtitle text is missing ({inside})"
+        );
+        assert_eq!(
+            outside,
+            0,
+            "{width}: bright pixels outside the saved margins x {:?}..{:?} y {:?}..{:?}",
+            spots.iter().map(|s| s.0).min(),
+            spots.iter().map(|s| s.0).max(),
+            spots.iter().map(|s| s.1).min(),
+            spots.iter().map(|s| s.1).max()
+        );
+        // The flat background image and the logo are really in the frame.
+        let pixel = |x: usize, y: usize| {
+            let at = (y * width + x) * 3;
+            [frame.stdout[at], frame.stdout[at + 1], frame.stdout[at + 2]]
+        };
+        assert!(
+            pixel(width / 10, height / 2)[2] > pixel(width / 10, height / 2)[0] + 40,
+            "{width}: background image"
+        );
+        // The logo's top-right corner sits on the corner of the safe area (margins included).
+        let logo_pixel = pixel(width - right - 8, top + 8);
+        assert!(
+            logo_pixel[0] > 150 && logo_pixel[1] < 80,
+            "{width}: logo {logo_pixel:?}"
+        );
+        let outside_logo = pixel(width - right + 8, top + 8);
+        assert!(
+            outside_logo[0] < 100,
+            "{width}: logo reaches past the right safe edge {outside_logo:?}"
+        );
+    }
+    // Two explicit simultaneous lines exceed a one-line template regardless of font metrics.
+    // The positive fixture above can legitimately fit on one line with another font.
+    let refused = temp.path().join("refused");
+    fs::create_dir(&refused).unwrap();
+    let mut two_lines = options(VideoPreset::FullHd, template(1));
+    two_lines.lyrics = "[00:00.20]灯りの下で\n[00:00.20]明日へ歩く\n[00:01.80]\n".into();
+    assert!(media::render(&source, &refused, &two_lines, &Progress::default()).is_err());
+    let mut other = options(VideoPreset::FullHd, template(2));
+    other.project = Some("別の客先".into());
+    assert!(media::render(&source, &refused, &other, &Progress::default()).is_err());
+}
+
+#[test]
+fn truncated_template_background_fails_quickly_instead_of_looping_forever() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    // A PNG cut off after the header passes the signature check but cannot be decoded.
+    let full = temp.path().join("full.png");
+    solid_png(&full, "800x450", "0x203060");
+    let cut = temp.path().join("cut.png");
+    fs::write(&cut, &fs::read(&full).unwrap()[..60]).unwrap();
+    let output = temp.path().join("out");
+    fs::create_dir(&output).unwrap();
+    let options = Options {
+        lyrics: "[00:00.20]あ\n[00:01.00]\n".into(),
+        template: Some(Template {
+            version: 1,
+            project: "客先A".into(),
+            style: Default::default(),
+            background_image: Some(cut),
+            logo: None,
+            horizontal_margin: 0.1,
+            vertical_margin: 0.1,
+            max_lines: 2,
+        }),
+        project: Some("客先A".into()),
+        preset: VideoPreset::Hd,
+        ..Options::default()
+    };
+    let progress = Progress::default();
+    // Stop a run that never ends so that the test itself cannot hang.
+    let cancel = progress.cancelled.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(25));
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let started = std::time::Instant::now();
+    assert!(media::render(&source, &output, &options, &progress).is_err());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "a broken background must be refused quickly, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn convert_checks_the_template_line_limit_before_slow_work() {
+    use karaoke_maker::template::Template;
+    let template = |lines: u8| Template {
+        version: 1,
+        project: "客先A".into(),
+        style: Default::default(),
+        background_image: None,
+        logo: None,
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: lines,
+    };
+    let long = "あ".repeat(60);
+    let options = |template: Option<Template>| Options {
+        lyrics: format!(
+            "[00:01.00]{long}
+[00:02.00]
+"
+        ),
+        template,
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    assert!(media::check_lyrics_layout(&options(Some(template(1))), 3.0).is_err());
+    assert!(media::check_lyrics_layout(&options(Some(template(4))), 3.0).is_ok());
+    assert!(media::check_lyrics_layout(&options(None), 3.0).is_ok());
+}
+#[test]
+fn still_background_keeps_the_output_length_at_other_tempos() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    // A name with a percent sign is read as a plain file, not as a numbered image sequence.
+    let plain = temp.path().join("plain.png");
+    solid_png(&plain, "800x450", "0x203060");
+    let background = temp.path().join("100%d.png");
+    fs::rename(&plain, &background).unwrap();
+    for tempo in [0.8, 1.25] {
+        let output = temp.path().join(format!("out-{tempo}"));
+        fs::create_dir(&output).unwrap();
+        let options = Options {
+            tempo,
+            lyrics: "[00:00.20]あ\n[00:01.00]\n".into(),
+            template: Some(Template {
+                version: 1,
+                project: "客先A".into(),
+                style: Default::default(),
+                background_image: Some(background.clone()),
+                logo: None,
+                horizontal_margin: 0.1,
+                vertical_margin: 0.1,
+                max_lines: 2,
+            }),
+            project: Some("客先A".into()),
+            preset: VideoPreset::Hd,
+            ..Options::default()
+        };
+        media::render(&source, &output, &options, &Progress::default()).unwrap();
+        let video = media::probe(&Tools::discover(), &output.join("karaoke.mp4")).unwrap();
+        assert!(
+            (video.duration - 2.0 / tempo).abs() < 0.25,
+            "{tempo}: {}",
+            video.duration
+        );
+    }
+}
+
+#[test]
+fn template_word_timed_subtitles_stay_inside_margins_and_respect_the_line_limit() {
+    use karaoke_maker::{alignment::Word, presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let background = temp.path().join("background.png");
+    solid_png(&background, "1280x720", "0x203060");
+    let template = |lines: u8| Template {
+        version: 1,
+        project: "客先A".into(),
+        style: Default::default(),
+        background_image: Some(background.clone()),
+        logo: None,
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: lines,
+    };
+    let words: Vec<Word> = (0..10)
+        .map(|i| Word {
+            text: "あいうえおか".into(),
+            start: 0.2 + i as f64 * 0.15,
+            end: 0.35 + i as f64 * 0.15,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        })
+        .collect();
+    let options = |preset, template| Options {
+        title: "語単位".into(),
+        preset,
+        words: words.clone(),
+        template: Some(template),
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    for (preset, width, height, margins) in [
+        (
+            VideoPreset::FullHd,
+            1920usize,
+            1080usize,
+            [192usize, 192, 108, 120],
+        ),
+        (VideoPreset::Vertical, 1080, 1920, [108, 160, 192, 320]),
+    ] {
+        let output = temp.path().join(format!("{width}"));
+        fs::create_dir(&output).unwrap();
+        media::render(
+            &source,
+            &output,
+            &options(preset, template(2)),
+            &Progress::default(),
+        )
+        .unwrap();
+        let frame = media::hidden_command(Tools::discover().ffmpeg)
+            .args(["-v", "error", "-ss", "0.6", "-i"])
+            .arg(output.join("karaoke.mp4"))
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(frame.status.success());
+        let [left, right, top, bottom] = margins;
+        let (mut inside, mut outside) = (0, 0);
+        for y in 0..height {
+            for x in 0..width {
+                let at = (y * width + x) * 3;
+                // Text is white or the light green fill; the background is dark blue.
+                if frame.stdout[at + 1] <= 200 {
+                    continue;
+                }
+                if x + 4 < left || x > width - right + 4 || y + 4 < top || y > height - bottom + 4 {
+                    outside += 1;
+                } else {
+                    inside += 1;
+                }
+            }
+        }
+        assert!(
+            inside > 2000,
+            "{width}: subtitle text is missing ({inside})"
+        );
+        assert_eq!(outside, 0, "{width}: text outside the saved margins");
+    }
+    let refused = temp.path().join("refused");
+    fs::create_dir(&refused).unwrap();
+    let mut too_wide = options(VideoPreset::Vertical, template(1));
+    too_wide.words.truncate(1);
+    too_wide.words[0].text = "あいうえおかきくけこ".repeat(10);
+    assert!(media::render(&source, &refused, &too_wide, &Progress::default()).is_err());
 }
 
 #[test]
@@ -649,4 +1087,193 @@ fn real_ffmpeg_exports_retimed_pitched_audio_and_captioned_video_without_modifyi
         .is_err()
     );
     assert_eq!(fs::read(dir.join("karaoke.wav")).unwrap(), before);
+}
+
+#[test]
+fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() {
+    use karaoke_maker::{presentation::VideoPreset, revision, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let signal: Vec<f32> = (0..44100 * 4)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 261.6256 / 44100.0).sin() * 0.2)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let tools = Tools::discover();
+    let make_previous = |name: &str, options: &Options| {
+        let dir = temp.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        media::write_stereo(&dir.join("instrumental-raw.wav"), &signal, &signal).unwrap();
+        media::write_stereo(&dir.join("vocals.wav"), &signal, &signal).unwrap();
+        media::export(
+            &tools,
+            &source,
+            &dir,
+            &media::probe(&tools, &source).unwrap(),
+            options,
+            4.0,
+            &Progress::default(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            serde_json::to_vec(options).unwrap(),
+        )
+        .unwrap();
+        dir
+    };
+    let lyrics = "[00:00.50]before\n[00:02.00]next".to_string();
+    let templated = Options {
+        sample_rate: 44100,
+        lyrics: lyrics.clone(),
+        template: Some(Template {
+            version: 1,
+            project: "客先A".into(),
+            style: Default::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: 0.2,
+            vertical_margin: 0.2,
+            max_lines: 2,
+        }),
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    let previous = make_previous("previous", &templated);
+    let revised = temp.path().join("revised");
+    fs::create_dir(&revised).unwrap();
+    revision::render_revision(
+        &previous,
+        &revised,
+        "[00:00.50]after\n[00:02.00]\n",
+        VideoPreset::FullHd,
+        &Progress::default(),
+    )
+    .unwrap();
+    let ass = fs::read_to_string(revised.join("lyrics.ass")).unwrap();
+    assert!(ass.contains(",384,384,"), "template margins kept: {ass}");
+    let saved: Options =
+        serde_json::from_slice(&fs::read(revised.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(saved.project.as_deref(), Some("客先A"));
+    assert_eq!(saved.template.unwrap().max_lines, 2);
+    // A result saved before templates existed has neither field and still revises.
+    let mut old: serde_json::Value = serde_json::to_value(Options {
+        sample_rate: 44100,
+        lyrics,
+        ..Options::default()
+    })
+    .unwrap();
+    old.as_object_mut().unwrap().remove("template");
+    old.as_object_mut().unwrap().remove("project");
+    let legacy = make_previous("legacy", &serde_json::from_value(old.clone()).unwrap());
+    fs::write(
+        legacy.join("settings.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    let revised_legacy = temp.path().join("revised-legacy");
+    fs::create_dir(&revised_legacy).unwrap();
+    revision::render_revision(
+        &legacy,
+        &revised_legacy,
+        "[00:00.50]after\n[00:02.00]\n",
+        VideoPreset::FullHd,
+        &Progress::default(),
+    )
+    .unwrap();
+    let ass = fs::read_to_string(revised_legacy.join("lyrics.ass")).unwrap();
+    assert!(!ass.contains(",384,384,"));
+}
+#[test]
+fn measured_multiline_word_highlights_later_lines_during_its_original_interval() {
+    use karaoke_maker::{alignment::Word, presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    for (preset, w, h) in [
+        (VideoPreset::FullHd, 1920usize, 1080usize),
+        (VideoPreset::Vertical, 1080, 1920),
+    ] {
+        let t = Template {
+            version: 1,
+            project: "test".into(),
+            style: Default::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: 0.1,
+            vertical_margin: 0.1,
+            max_lines: 4,
+        };
+        let words = vec![Word {
+            text: "あいうえおかきくけこ".repeat(4),
+            start: 0.1,
+            end: 0.9,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        }];
+        let ass =
+            karaoke_maker::lyrics::make_ass_words("", &words, 1.0, 1.0, preset, &t.style, Some(&t))
+                .unwrap();
+        let dir = temp.path().join(w.to_string());
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("lyrics.ass"), ass).unwrap();
+        let mut last_rows = Vec::new();
+        let mut late_green = Vec::new();
+        for second in ["0.2", "0.5", "0.8"] {
+            let frame = media::hidden_command(Tools::discover().ffmpeg)
+                .current_dir(&dir)
+                .args(["-v", "error", "-f", "lavfi", "-i"])
+                .arg(format!("color=black:s={w}x{h}:r=30:d=1"))
+                .args([
+                    "-vf",
+                    "ass=lyrics.ass",
+                    "-ss",
+                    second,
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ])
+                .output()
+                .unwrap();
+            assert!(frame.status.success());
+            let mut rows = vec![0usize; h];
+            let mut green = vec![0usize; h];
+            for y in 0..h {
+                for x in 0..w {
+                    let p = &frame.stdout[(y * w + x) * 3..(y * w + x) * 3 + 3];
+                    if p.iter().copied().max().unwrap() > 200 {
+                        rows[y] += 1
+                    }
+                    if p[1] > 200 && p[0] > 160 && p[2] < 210 && p[1].saturating_sub(p[2]) > 25 {
+                        green[y] += 1
+                    }
+                }
+            }
+            last_rows = rows;
+            late_green.push(green);
+        }
+        let mut bands = Vec::new();
+        let mut start = None;
+        for (y, &ink) in last_rows.iter().enumerate() {
+            if ink > 0 && start.is_none() {
+                start = Some(y)
+            }
+            if ink == 0 && start.is_some() {
+                bands.push((start.take().unwrap(), y));
+            }
+        }
+        assert!(bands.len() >= 2, "expected multiline {w}");
+        let (a, b) = *bands.last().unwrap();
+        assert_eq!(
+            late_green[0][a..b].iter().sum::<usize>(),
+            0,
+            "last line starts too early {w}"
+        );
+        assert!(
+            late_green[2][a..b].iter().sum::<usize>() > 100,
+            "last line never highlighted {w}"
+        );
+    }
 }
