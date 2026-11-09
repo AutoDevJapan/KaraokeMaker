@@ -72,7 +72,9 @@ pub fn timed_lines_from_lrc(text: &str, duration: f64) -> Result<Vec<TimedLine>>
         if cue.text.trim().is_empty() {
             continue;
         }
-        let end = cues.get(index + 1).map_or(duration, |next| next.seconds);
+        let end = cues
+            .get(index + 1)
+            .map_or(duration, |next| next.seconds.min(duration));
         lines.push(TimedLine {
             start: cue.seconds,
             end,
@@ -102,6 +104,12 @@ pub fn timed_lines_lrc(lines: &[TimedLine], duration: f64) -> Result<String> {
         );
         ensure!(line.start >= previous_end, "歌詞の時刻が重複しています。");
         ensure!(!line.text.trim().is_empty(), "歌詞を入力してください。");
+        ensure!(
+            line.text
+                .split('\n')
+                .all(|part| !part.trim_start().starts_with('[')),
+            "歌詞行の先頭の [ はLRCの時刻と区別できません。全角の［を使用してください。"
+        );
         // Validate on the persisted centisecond timeline as well as raw input.
         ensure!(
             (line.start * 100.0).round() < (line.end * 100.0).round(),
@@ -126,7 +134,9 @@ pub fn timed_lines_lrc(lines: &[TimedLine], duration: f64) -> Result<String> {
         previous_end = line.end;
     }
     ensure!(!cues.is_empty(), "歌詞を1行以上入力してください。");
-    Ok(lyrics::to_lrc(&cues))
+    let lrc = lyrics::to_lrc(&cues);
+    lyrics::parse_lrc(&lrc)?;
+    Ok(lrc)
 }
 
 /// The editor displays the timeline of the already playable audio, including tempo changes.
@@ -226,6 +236,29 @@ mod timing_tests {
         assert_eq!(cues[1].text, "");
         assert_eq!(cues[3].text, "last");
         assert_eq!(cues[4].text, "");
+    }
+    #[test]
+    fn accepted_edits_remain_readable_at_rounded_song_end() {
+        let duration = 5.006;
+        let saved = timed_lines_lrc(&[line(1.0, duration, "end")], duration).unwrap();
+        let reopened = timed_lines_from_lrc(&saved, duration).unwrap();
+        assert_eq!(reopened[0].end, duration);
+        assert_eq!(timed_lines_lrc(&reopened, duration).unwrap(), saved);
+    }
+    #[test]
+    fn ambiguous_or_oversized_lyrics_do_not_replace_valid_draft() {
+        let mut draft = TimingDraft::from_lrc("[00:01.00]before\n[00:02.00]\n", 10.0).unwrap();
+        let saved = draft.lrc().unwrap();
+        for text in [
+            "[chorus]".into(),
+            "[00:04.00]extra".into(),
+            "line\n [00:04.00]extra".into(),
+            "x".repeat(65536),
+        ] {
+            assert!(draft.replace(vec![line(1.0, 2.0, &text)]).is_err());
+            assert_eq!(draft.lrc().unwrap(), saved);
+        }
+        assert!(!draft.undo());
     }
     #[test]
     fn failed_edit_preserves_valid_draft_and_undo_history() {
