@@ -254,13 +254,16 @@ fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientat
             pixel(width / 10, height / 2)[2] > pixel(width / 10, height / 2)[0] + 40,
             "{width}: background image"
         );
-        let logo_pixel = pixel(
-            width - (height as f64 * 0.04) as usize - 8,
-            (height as f64 * 0.04) as usize + 8,
-        );
+        // The logo's top-right corner sits on the corner of the safe area (margins included).
+        let logo_pixel = pixel(width - right - 8, top + 8);
         assert!(
             logo_pixel[0] > 150 && logo_pixel[1] < 80,
             "{width}: logo {logo_pixel:?}"
+        );
+        let outside_logo = pixel(width - right + 8, top + 8);
+        assert!(
+            outside_logo[0] < 100,
+            "{width}: logo reaches past the right safe edge {outside_logo:?}"
         );
     }
     // One line is not enough for this lyric, and another project's template is refused.
@@ -281,98 +284,123 @@ fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientat
 }
 
 #[test]
-fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() {
-    use karaoke_maker::{presentation::VideoPreset, revision, template::Template};
+fn truncated_template_background_fails_quickly_instead_of_looping_forever() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
     let temp = tempfile::tempdir().unwrap();
-    let source = temp.path().join("original.wav");
-    let signal: Vec<f32> = (0..44100 * 4)
-        .map(|i| (i as f32 * std::f32::consts::TAU * 261.6256 / 44100.0).sin() * 0.2)
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
         .collect();
     media::write_stereo(&source, &signal, &signal).unwrap();
-    let tools = Tools::discover();
-    let make_previous = |name: &str, options: &Options| {
-        let dir = temp.path().join(name);
-        fs::create_dir(&dir).unwrap();
-        media::write_stereo(&dir.join("instrumental-raw.wav"), &signal, &signal).unwrap();
-        media::write_stereo(&dir.join("vocals.wav"), &signal, &signal).unwrap();
-        media::export(
-            &tools,
-            &source,
-            &dir,
-            &media::probe(&tools, &source).unwrap(),
-            options,
-            4.0,
-            &Progress::default(),
-        )
-        .unwrap();
-        fs::write(
-            dir.join("settings.json"),
-            serde_json::to_vec(options).unwrap(),
-        )
-        .unwrap();
-        dir
-    };
-    let lyrics = "[00:00.50]before\n[00:02.00]next".to_string();
-    let templated = Options {
-        sample_rate: 44100,
-        lyrics: lyrics.clone(),
+    // A PNG cut off after the header passes the signature check but cannot be decoded.
+    let full = temp.path().join("full.png");
+    solid_png(&full, "800x450", "0x203060");
+    let cut = temp.path().join("cut.png");
+    fs::write(&cut, &fs::read(&full).unwrap()[..60]).unwrap();
+    let output = temp.path().join("out");
+    fs::create_dir(&output).unwrap();
+    let options = Options {
+        lyrics: "[00:00.20]あ\n[00:01.00]\n".into(),
         template: Some(Template {
             version: 1,
             project: "客先A".into(),
             style: Default::default(),
-            background_image: None,
+            background_image: Some(cut),
             logo: None,
-            horizontal_margin: 0.2,
-            vertical_margin: 0.2,
+            horizontal_margin: 0.1,
+            vertical_margin: 0.1,
             max_lines: 2,
         }),
         project: Some("客先A".into()),
+        preset: VideoPreset::Hd,
         ..Options::default()
     };
-    let previous = make_previous("previous", &templated);
-    let revised = temp.path().join("revised");
-    fs::create_dir(&revised).unwrap();
-    revision::render_revision(
-        &previous,
-        &revised,
-        "[00:00.50]after\n[00:02.00]\n",
-        VideoPreset::FullHd,
-        &Progress::default(),
-    )
-    .unwrap();
-    let ass = fs::read_to_string(revised.join("lyrics.ass")).unwrap();
-    assert!(ass.contains(",384,384,"), "template margins kept: {ass}");
-    let saved: Options =
-        serde_json::from_slice(&fs::read(revised.join("settings.json")).unwrap()).unwrap();
-    assert_eq!(saved.project.as_deref(), Some("客先A"));
-    assert_eq!(saved.template.unwrap().max_lines, 2);
-    // A result saved before templates existed has neither field and still revises.
-    let mut old: serde_json::Value = serde_json::to_value(Options {
-        sample_rate: 44100,
-        lyrics,
+    let progress = Progress::default();
+    // Stop a run that never ends so that the test itself cannot hang.
+    let cancel = progress.cancelled.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(25));
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let started = std::time::Instant::now();
+    assert!(media::render(&source, &output, &options, &progress).is_err());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "a broken background must be refused quickly, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn convert_checks_the_template_line_limit_before_slow_work() {
+    use karaoke_maker::template::Template;
+    let template = |lines: u8| Template {
+        version: 1,
+        project: "客先A".into(),
+        style: Default::default(),
+        background_image: None,
+        logo: None,
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: lines,
+    };
+    let long = "あ".repeat(60);
+    let options = |template: Option<Template>| Options {
+        lyrics: format!(
+            "[00:01.00]{long}
+[00:02.00]
+"
+        ),
+        template,
+        project: Some("客先A".into()),
         ..Options::default()
-    })
-    .unwrap();
-    old.as_object_mut().unwrap().remove("template");
-    old.as_object_mut().unwrap().remove("project");
-    let legacy = make_previous("legacy", &serde_json::from_value(old.clone()).unwrap());
-    fs::write(
-        legacy.join("settings.json"),
-        serde_json::to_vec(&old).unwrap(),
-    )
-    .unwrap();
-    let revised_legacy = temp.path().join("revised-legacy");
-    fs::create_dir(&revised_legacy).unwrap();
-    revision::render_revision(
-        &legacy,
-        &revised_legacy,
-        "[00:00.50]after\n[00:02.00]\n",
-        VideoPreset::FullHd,
-        &Progress::default(),
-    )
-    .unwrap();
-    let ass = fs::read_to_string(revised_legacy.join("lyrics.ass")).unwrap();
-    assert!(!ass.contains(",384,384,"));
+    };
+    assert!(media::check_lyrics_layout(&options(Some(template(1))), 3.0).is_err());
+    assert!(media::check_lyrics_layout(&options(Some(template(4))), 3.0).is_ok());
+    assert!(media::check_lyrics_layout(&options(None), 3.0).is_ok());
+}
+#[test]
+fn still_background_keeps_the_output_length_at_other_tempos() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    // A name with a percent sign is read as a plain file, not as a numbered image sequence.
+    let plain = temp.path().join("plain.png");
+    solid_png(&plain, "800x450", "0x203060");
+    let background = temp.path().join("100%d.png");
+    fs::rename(&plain, &background).unwrap();
+    for tempo in [0.8, 1.25] {
+        let output = temp.path().join(format!("out-{tempo}"));
+        fs::create_dir(&output).unwrap();
+        let options = Options {
+            tempo,
+            lyrics: "[00:00.20]あ\n[00:01.00]\n".into(),
+            template: Some(Template {
+                version: 1,
+                project: "客先A".into(),
+                style: Default::default(),
+                background_image: Some(background.clone()),
+                logo: None,
+                horizontal_margin: 0.1,
+                vertical_margin: 0.1,
+                max_lines: 2,
+            }),
+            project: Some("客先A".into()),
+            preset: VideoPreset::Hd,
+            ..Options::default()
+        };
+        media::render(&source, &output, &options, &Progress::default()).unwrap();
+        let video = media::probe(&Tools::discover(), &output.join("karaoke.mp4")).unwrap();
+        assert!(
+            (video.duration - 2.0 / tempo).abs() < 0.25,
+            "{tempo}: {}",
+            video.duration
+        );
+    }
 }
 
 #[test]
@@ -747,6 +775,10 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
         &Progress::default(),
     )
     .unwrap();
+    let mut history = revision::load_history(&revised, 3.2).unwrap().unwrap();
+    assert_eq!(history.lines()[0].text, "corrected");
+    assert!(history.undo());
+    assert_eq!(history.lines()[0].text, "before");
     assert_eq!(
         fs::read(previous.join("karaoke.wav")).unwrap(),
         before_audio
@@ -786,6 +818,134 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
         fs::read_to_string(revised.join("lyrics.srt")).unwrap(),
         "1\n00:00:00,400 --> 00:00:01,600\ncorrected\n\n"
     );
+}
+
+#[test]
+fn subtitle_revision_chain_inherits_history_and_never_writes_to_its_source() {
+    use karaoke_maker::{presentation::VideoPreset, revision};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let signal: Vec<f32> = (0..44100 * 4)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 261.6256 / 44100.0).sin() * 0.2)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let first = temp.path().join("first");
+    fs::create_dir(&first).unwrap();
+    media::write_stereo(&first.join("instrumental-raw.wav"), &signal, &signal).unwrap();
+    media::write_stereo(&first.join("vocals.wav"), &signal, &signal).unwrap();
+    let tools = Tools::discover();
+    let options = Options {
+        key: 3,
+        tempo: 1.25,
+        sample_rate: 44100,
+        lyrics: "[00:00.50]before\n[00:02.00]next".into(),
+        ..Options::default()
+    };
+    media::export(
+        &tools,
+        &source,
+        &first,
+        &media::probe(&tools, &source).unwrap(),
+        &options,
+        4.0,
+        &Progress::default(),
+    )
+    .unwrap();
+    // An older result whose stored lyrics no longer satisfy the strict timing rules
+    // (a cue beyond the song end) can still be revised; its history starts from the new text.
+    let legacy = Options {
+        lyrics: "[00:00.50]before\n[00:09.00]late\n".into(),
+        ..options.clone()
+    };
+    fs::write(
+        first.join("settings.json"),
+        serde_json::to_vec(&legacy).unwrap(),
+    )
+    .unwrap();
+    let snapshot = |dir: &std::path::Path| -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    fs::read(entry.path()).unwrap(),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let revise = |from: &std::path::Path, name: &str, text: &str| {
+        let dir = temp.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        revision::render_revision(from, &dir, text, VideoPreset::Hd, &Progress::default()).unwrap();
+        dir
+    };
+    let first_before = snapshot(&first);
+    let second = revise(&first, "second", "[00:00.40]one\n[00:01.60]\n");
+    assert_eq!(snapshot(&first), first_before);
+    let history = revision::load_history(&second, 3.2).unwrap().unwrap();
+    assert_eq!(history.lines()[0].text, "one");
+    let second_before = snapshot(&second);
+    let third = revise(&second, "third", "[00:00.40]two\n[00:01.60]\n");
+    assert_eq!(snapshot(&second), second_before);
+    let fourth = revise(&third, "fourth", "[00:00.40]three\n[00:01.60]\n");
+    let mut history = revision::load_history(&fourth, 3.2).unwrap().unwrap();
+    let mut seen = vec![history.lines()[0].text.clone()];
+    while history.undo() {
+        seen.push(history.lines()[0].text.clone());
+    }
+    assert_eq!(seen, ["three", "two", "one"]);
+    // A corrupt, other-song or oversized history in the source is rejected without creating
+    // anything in the new folder, and the source history is left as it was.
+    let other_song = revision::TimingDraft::from_lrc("[00:01.00]x\n[00:02.00]\n", 9.0)
+        .unwrap()
+        .to_json()
+        .unwrap()
+        .into_bytes();
+    let mut oversized = other_song.clone();
+    oversized.resize(16 * 1024 * 1024 + 1, b' ');
+    for (name, bad) in [
+        ("corrupt", b"{broken".to_vec()),
+        ("other-song", other_song),
+        ("oversized", oversized),
+    ] {
+        let broken = temp.path().join(format!("broken-{name}"));
+        fs::create_dir(&broken).unwrap();
+        for file in ["settings.json", "karaoke.wav", "vocals.wav"] {
+            fs::copy(fourth.join(file), broken.join(file)).unwrap();
+        }
+        fs::write(broken.join("timing-history.json"), &bad).unwrap();
+        let rejected = temp.path().join(format!("rejected-{name}"));
+        fs::create_dir(&rejected).unwrap();
+        assert!(
+            revision::render_revision(
+                &broken,
+                &rejected,
+                "[00:00.40]x\n[00:01.60]\n",
+                VideoPreset::Hd,
+                &Progress::default()
+            )
+            .is_err(),
+            "{name}"
+        );
+        assert_eq!(fs::read_dir(&rejected).unwrap().count(), 0, "{name}");
+        assert_eq!(
+            fs::read(broken.join("timing-history.json")).unwrap(),
+            bad,
+            "{name}"
+        );
+    }
+    for dir in [&second, &third, &fourth] {
+        assert!(fs::read_dir(dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
 }
 
 #[test]
@@ -868,4 +1028,99 @@ fn real_ffmpeg_exports_retimed_pitched_audio_and_captioned_video_without_modifyi
         .is_err()
     );
     assert_eq!(fs::read(dir.join("karaoke.wav")).unwrap(), before);
+}
+
+#[test]
+fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() {
+    use karaoke_maker::{presentation::VideoPreset, revision, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let signal: Vec<f32> = (0..44100 * 4)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 261.6256 / 44100.0).sin() * 0.2)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let tools = Tools::discover();
+    let make_previous = |name: &str, options: &Options| {
+        let dir = temp.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        media::write_stereo(&dir.join("instrumental-raw.wav"), &signal, &signal).unwrap();
+        media::write_stereo(&dir.join("vocals.wav"), &signal, &signal).unwrap();
+        media::export(
+            &tools,
+            &source,
+            &dir,
+            &media::probe(&tools, &source).unwrap(),
+            options,
+            4.0,
+            &Progress::default(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            serde_json::to_vec(options).unwrap(),
+        )
+        .unwrap();
+        dir
+    };
+    let lyrics = "[00:00.50]before\n[00:02.00]next".to_string();
+    let templated = Options {
+        sample_rate: 44100,
+        lyrics: lyrics.clone(),
+        template: Some(Template {
+            version: 1,
+            project: "客先A".into(),
+            style: Default::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: 0.2,
+            vertical_margin: 0.2,
+            max_lines: 2,
+        }),
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    let previous = make_previous("previous", &templated);
+    let revised = temp.path().join("revised");
+    fs::create_dir(&revised).unwrap();
+    revision::render_revision(
+        &previous,
+        &revised,
+        "[00:00.50]after\n[00:02.00]\n",
+        VideoPreset::FullHd,
+        &Progress::default(),
+    )
+    .unwrap();
+    let ass = fs::read_to_string(revised.join("lyrics.ass")).unwrap();
+    assert!(ass.contains(",384,384,"), "template margins kept: {ass}");
+    let saved: Options =
+        serde_json::from_slice(&fs::read(revised.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(saved.project.as_deref(), Some("客先A"));
+    assert_eq!(saved.template.unwrap().max_lines, 2);
+    // A result saved before templates existed has neither field and still revises.
+    let mut old: serde_json::Value = serde_json::to_value(Options {
+        sample_rate: 44100,
+        lyrics,
+        ..Options::default()
+    })
+    .unwrap();
+    old.as_object_mut().unwrap().remove("template");
+    old.as_object_mut().unwrap().remove("project");
+    let legacy = make_previous("legacy", &serde_json::from_value(old.clone()).unwrap());
+    fs::write(
+        legacy.join("settings.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    let revised_legacy = temp.path().join("revised-legacy");
+    fs::create_dir(&revised_legacy).unwrap();
+    revision::render_revision(
+        &legacy,
+        &revised_legacy,
+        "[00:00.50]after\n[00:02.00]\n",
+        VideoPreset::FullHd,
+        &Progress::default(),
+    )
+    .unwrap();
+    let ass = fs::read_to_string(revised_legacy.join("lyrics.ass")).unwrap();
+    assert!(!ass.contains(",384,384,"));
 }

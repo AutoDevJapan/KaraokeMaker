@@ -59,10 +59,15 @@ impl Template {
             let mut head = [0u8; 8];
             let read = fs::File::open(path)
                 .and_then(|mut file| std::io::Read::read(&mut file, &mut head))?;
+            let png = head[..read].starts_with(b"\x89PNG\r\n\x1a\n");
+            let jpeg = head[..read].starts_with(&[0xff, 0xd8, 0xff]);
             ensure!(
-                head[..read].starts_with(b"\x89PNG\r\n\x1a\n")
-                    || head[..read].starts_with(&[0xff, 0xd8, 0xff]),
-                "素材の中身がPNGまたはJPEGではありません。"
+                if extension.as_deref() == Some("png") {
+                    png
+                } else {
+                    jpeg
+                },
+                "素材の拡張子と中身（PNGかJPEG）が一致しません。"
             );
         }
         Ok(())
@@ -220,5 +225,15 @@ mod tests {
         fs::write(&fake, b"#EXTM3U\nhttp://example.invalid/a.ts\n").unwrap();
         value.logo = Some(fake);
         assert!(value.validate("project-a").is_err());
+        // A JPEG named .png and a PNG named .jpg are refused: the name must match the content.
+        for (name, content) in [
+            ("jpeg-as.png", &[0xffu8, 0xd8, 0xff, 0xe0, 0, 0][..]),
+            ("png-as.jpg", &b"\x89PNG\r\n\x1a\nrest"[..]),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, content).unwrap();
+            value.logo = Some(path);
+            assert!(value.validate("project-a").is_err(), "{name}");
+        }
     }
 }
