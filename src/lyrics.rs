@@ -556,10 +556,15 @@ fn ass_with_layout(
     let (mut title_left, mut title_right) = (left + logo_reserve, right + logo_reserve);
     let mut title_top = top;
     if let Some(p) = template.and_then(|t| t.placement.as_ref()) {
-        title_left = title_left.max((p.title.x * width as f64).ceil() as u32);
-        title_right =
-            title_right.max(((1.0 - p.title.x - p.title.width) * width as f64).ceil() as u32);
-        title_top = top.max((p.title.y * height as f64).ceil() as u32);
+        title_left = (p.title.x * width as f64).ceil() as u32;
+        title_right = ((1.0 - p.title.x - p.title.width) * width as f64).ceil() as u32;
+        title_top = (p.title.y * height as f64).ceil() as u32;
+        if template.is_some_and(|t| t.logo.is_some()) {
+            ensure!(
+                title_right >= right + logo_reserve,
+                "タイトル指定位置がロゴ枠と重なります。位置は自動変更しません。"
+            );
+        }
         ensure!(
             p.subtitles.height * height as f64
                 >= lyric_size as f64 * 1.5 * template.unwrap().max_lines as f64,
@@ -667,6 +672,32 @@ mod tests {
             max_lines,
             placement: None,
         }
+    }
+    #[test]
+    fn explicit_title_box_is_independent_of_subtitle_width() {
+        use crate::template::{Placement, Rect};
+        let mut t = template(0.05, 0.05, 1);
+        t.placement = Some(Placement {
+            title: Rect {
+                x: 0.1,
+                y: 0.15,
+                width: 0.8,
+                height: 0.15,
+            },
+            subtitles: Rect {
+                x: 0.3,
+                y: 0.6,
+                width: 0.4,
+                height: 0.2,
+            },
+            avoid: vec![],
+        });
+        let cues = parse_lrc("[00:00.10]灯り\n[00:00.90]\n").unwrap();
+        let ass = make_ass_templated("タイトル", &cues, 1.0, 1.0, VideoPreset::FullHd, &t).unwrap();
+        let title = ass.lines().find(|l| l.starts_with("Style: Title")).unwrap();
+        let fields: Vec<_> = title.split(',').collect();
+        assert_eq!(fields[19], "192");
+        assert_eq!(fields[21], "162");
     }
     fn lyric_margins(ass: &str) -> Vec<u32> {
         let style = ass
