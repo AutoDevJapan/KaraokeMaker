@@ -185,6 +185,78 @@ pub fn timed_lines_lrc(lines: &[TimedLine], duration: f64) -> Result<String> {
     Ok(lrc)
 }
 
+/// Missing history is distinct from unreadable, oversized or invalid history.
+pub fn load_history(dir: &Path, duration: f64) -> Result<Option<TimingDraft>> {
+    let file = match fs::File::open(dir.join("timing-history.json")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(Some(read_history(file, duration)?))
+}
+
+fn read_history(reader: impl std::io::Read, duration: f64) -> Result<TimingDraft> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= 16 * 1024 * 1024, "編集履歴が大きすぎます。");
+    TimingDraft::from_json(std::str::from_utf8(&bytes)?, duration)
+}
+
+pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
+    use std::io::Write;
+    let json = draft.to_json()?;
+    let temporary = dir.join(format!("timing-history-{}.tmp", uuid::Uuid::new_v4()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| -> Result<()> {
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+        // Publish complete bytes atomically without replacing any existing file.
+        fs::hard_link(&temporary, dir.join("timing-history.json"))?;
+        Ok(())
+    })();
+    drop(file);
+    history_save_result(result, &temporary, fs::remove_file(&temporary))
+}
+
+fn history_save_result(
+    result: Result<()>,
+    temporary: &Path,
+    cleanup: std::io::Result<()>,
+) -> Result<()> {
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (result, Err(cleanup)) => Err(anyhow::anyhow!(
+            "履歴の保存結果: {}。一時ファイル {} の回収に失敗しました: {}",
+            result
+                .err()
+                .map_or_else(|| "保存済み".into(), |error| error.to_string()),
+            temporary.display(),
+            cleanup
+        )),
+    }
+}
+
+/// The editor displays the timeline of the already playable audio, including tempo changes.
+fn initial_history_draft(previous: &Options, text: &str, duration: f64) -> Result<TimingDraft> {
+    // Older results may contain lyrics that predate the strict history rules. They can
+    // still be revised; history then starts from the new valid lyrics.
+    // Option errors propagate. After validation, editable_lrc can only fail on old lyrics syntax.
+    previous.validate()?;
+    let original = editable_lrc(previous).unwrap_or_default();
+    if original.trim().is_empty() {
+        return TimingDraft::from_lrc(text, duration);
+    }
+    match TimingDraft::from_lrc(&original, duration) {
+        Ok(draft) => Ok(draft),
+        Err(_) => TimingDraft::from_lrc(text, duration),
+    }
+}
+
 /// The editor displays the timeline of the already playable audio, including tempo changes.
 pub fn editable_lrc(options: &Options) -> Result<String> {
     options.validate()?;
@@ -219,17 +291,28 @@ pub fn render_revision(
     let previous: Options = serde_json::from_slice(&fs::read(source.join("settings.json"))?)?;
     previous.validate()?;
     let options = Options {
-        title: previous.title,
+        title: previous.title.clone(),
         lyrics: text.into(),
         preset,
-        style: previous.style,
-        template: previous.template,
-        project: previous.project,
+        style: previous.style.clone(),
+        template: previous.template.clone(),
+        project: previous.project.clone(),
         sample_rate: previous.sample_rate,
         original_video: false,
         ..Options::default()
     };
     options.validate()?;
+    if !text.trim().is_empty() {
+        let duration =
+            media::probe(&media::Tools::discover(), &source.join("karaoke.wav"))?.duration;
+        let lines = timed_lines_from_lrc(text, duration)?;
+        let mut draft = match load_history(source, duration)? {
+            Some(draft) => draft,
+            None => initial_history_draft(&previous, text, duration)?,
+        };
+        draft.replace(lines)?;
+        save_history_new(dir, &draft)?;
+    }
     for (input, output) in [
         ("karaoke.wav", "revision-audio.wav"),
         ("vocals.wav", "revision-vocals.wav"),
@@ -257,6 +340,119 @@ pub fn render_revision(
 #[cfg(test)]
 mod timing_tests {
     use super::*;
+    #[test]
+    fn first_revision_history_starts_from_new_lyrics_when_original_is_not_strict() {
+        let previous = Options {
+            lyrics: "[00:01.00]before\n[00:09.00]late\n".into(),
+            ..Options::default()
+        };
+        assert!(TimingDraft::from_lrc(&editable_lrc(&previous).unwrap(), 5.0).is_err());
+        let draft = initial_history_draft(&previous, "[00:01.00]after\n[00:02.00]\n", 5.0).unwrap();
+        assert_eq!(draft.lines()[0].text, "after");
+        let valid = Options {
+            lyrics: "[00:01.00]original\n[00:02.00]\n".into(),
+            ..Options::default()
+        };
+        let draft = initial_history_draft(&valid, "[00:01.00]after\n[00:02.00]\n", 5.0).unwrap();
+        assert_eq!(draft.lines()[0].text, "original");
+    }
+    #[test]
+    fn history_reader_accepts_limit_and_stops_after_one_excess_byte() {
+        const LIMIT: usize = 16 * 1024 * 1024;
+        let draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        let mut bytes = draft.to_json().unwrap().into_bytes();
+        bytes.resize(LIMIT, b' ');
+        let mut input = std::io::Cursor::new(&bytes);
+        assert!(read_history(&mut input, 5.0).is_ok());
+        assert_eq!(input.position(), LIMIT as u64);
+        bytes.extend_from_slice(b"  ");
+        let mut input = std::io::Cursor::new(&bytes);
+        assert!(read_history(&mut input, 5.0).is_err());
+        assert_eq!(input.position(), LIMIT as u64 + 1);
+    }
+    #[test]
+    fn history_cleanup_failure_retains_original_error_and_remaining_path() {
+        let path = Path::new("remaining-history.tmp");
+        let error = history_save_result(
+            Err(anyhow::anyhow!("original write error")),
+            path,
+            Err(std::io::Error::other("cleanup error")),
+        )
+        .unwrap_err()
+        .to_string();
+        for expected in [
+            "original write error",
+            "cleanup error",
+            "remaining-history.tmp",
+        ] {
+            assert!(error.contains(expected), "missing {expected}: {error}");
+        }
+        let error = history_save_result(Ok(()), path, Err(std::io::Error::other("cleanup error")))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("保存済み"));
+        assert!(error.contains("remaining-history.tmp"));
+        assert!(error.contains("cleanup error"));
+        assert!(history_save_result(Ok(()), path, Ok(())).is_ok());
+        assert_eq!(
+            history_save_result(Err(anyhow::anyhow!("original")), path, Ok(()))
+                .unwrap_err()
+                .to_string(),
+            "original"
+        );
+    }
+    #[test]
+    fn persisted_revision_history_reopens_and_preserves_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = "[00:01.00]original\n[00:02.00]\n";
+        let mut draft = TimingDraft::from_lrc(original, 5.0).unwrap();
+        draft.replace(vec![line(2.0, 3.0, "changed")]).unwrap();
+        save_history_new(dir.path(), &draft).unwrap();
+        drop(draft);
+        let mut reopened = load_history(dir.path(), 5.0).unwrap().unwrap();
+        assert_eq!(reopened.lines()[0].text, "changed");
+        assert!(reopened.undo());
+        assert_eq!(reopened.lrc().unwrap(), original);
+        let bytes = fs::read(dir.path().join("timing-history.json")).unwrap();
+        assert!(save_history_new(dir.path(), &reopened).is_err());
+        assert_eq!(
+            fs::read(dir.path().join("timing-history.json")).unwrap(),
+            bytes
+        );
+        assert!(load_history(dir.path(), 6.0).is_err());
+        fs::write(dir.path().join("timing-history.json"), "{").unwrap();
+        assert!(load_history(dir.path(), 5.0).is_err());
+        fs::remove_file(dir.path().join("timing-history.json")).unwrap();
+        assert!(load_history(dir.path(), 5.0).unwrap().is_none());
+        fs::create_dir(dir.path().join("timing-history.json")).unwrap();
+        assert!(load_history(dir.path(), 5.0).is_err());
+    }
+    #[test]
+    fn history_disk_failures_preserve_existing_bytes_and_leave_no_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        let path = dir.path().join("timing-history.json");
+        fs::write(&path, b"original file").unwrap();
+        let original_permissions = fs::metadata(&path).unwrap().permissions();
+        let mut permissions = original_permissions.clone();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+        assert!(save_history_new(dir.path(), &draft).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original file");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        // Restore the original writable permissions for this test-owned file.
+        fs::set_permissions(&path, original_permissions).unwrap();
+        assert!(save_history_new(&path, &draft).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original file");
+        let oversized = dir.path().join("oversized");
+        fs::create_dir(&oversized).unwrap();
+        fs::File::create(oversized.join("timing-history.json"))
+            .unwrap()
+            .set_len(16 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(load_history(&oversized, 5.0).is_err());
+        assert_eq!(draft.lines()[0].text, "original");
+    }
     fn line(start: f64, end: f64, text: &str) -> TimedLine {
         TimedLine {
             start,
