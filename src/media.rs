@@ -434,27 +434,7 @@ pub fn export(
     if !options.words.is_empty() {
         cues.retain(|cue| cue.seconds < duration);
     }
-    let ass = match &options.template {
-        Some(template) => lyrics::make_ass_templated(
-            &options.title,
-            &cues,
-            duration,
-            options.tempo,
-            options.preset,
-            template,
-        )?,
-        None => lyrics::make_ass_styled(
-            &options.title,
-            &cues,
-            duration,
-            options.tempo,
-            options.preset,
-            &options.style,
-        )?,
-    };
-    let ass = if options.words.is_empty() {
-        ass
-    } else {
+    let ass = if !options.words.is_empty() {
         lyrics::make_ass_words(
             &options.title,
             &options.words,
@@ -467,6 +447,25 @@ pub fn export(
                 .map_or(&options.style, |t| &t.style),
             options.template.as_ref(),
         )?
+    } else {
+        match &options.template {
+            Some(template) => lyrics::make_ass_templated(
+                &options.title,
+                &cues,
+                duration,
+                options.tempo,
+                options.preset,
+                template,
+            )?,
+            None => lyrics::make_ass_styled(
+                &options.title,
+                &cues,
+                duration,
+                options.tempo,
+                options.preset,
+                &options.style,
+            )?,
+        }
     };
     fs::write(dir.join("lyrics.ass"), ass)?;
     fs::write(
