@@ -82,7 +82,9 @@ pub fn measure_styled(
     let scratch = Scratch(dir);
     // Use the output Fontsize directly. With matching PlayRes there is no extra scaling.
     let width = 8192u32;
-    let height = (size * 12 + 128).max(512);
+    let height = (size * 12 + 128)
+        .max(size * text.lines().count() as u32 * 2 + 128)
+        .max(512);
     let escaped = text
         .replace('\\', "＼")
         .replace('{', "｛")
@@ -92,8 +94,18 @@ pub fn measure_styled(
         .replace('\r', "")
         .replace('\n', "\\N");
     let weight = if bold { -1 } else { 0 };
+    // Match the export anchors: subtitles are bottom-centred, titles top-centred.
+    // A left-aligned ink width alone misses the centring effect of leading/trailing spaces.
+    let alignment = if bold { 2 } else { 8 };
+    // Export scales the base 1px lyric shadow with the base 44 Fontsize; this is a
+    // style parameter, never a conversion from Fontsize to glyph width.
+    let shadow = if bold {
+        (size as f64 / 44.0).round() as u32
+    } else {
+        0
+    };
     let ass = format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\nStyle: M,{font},{size},&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,{weight},0,0,0,100,100,0,0,1,{outline},0,7,64,64,64,1\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\nDialogue: 0,0:00:00.00,0:00:01.00,M,,0,0,0,,{escaped}\n"
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\nStyle: M,{font},{size},&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,{weight},0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},0,0,64,1\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\nDialogue: 0,0:00:00.00,0:00:01.00,M,,0,0,0,,{escaped}\n"
     );
     fs::write(scratch.0.join("measure.ass"), ass)?;
     let output = crate::media::hidden_command(crate::media::Tools::discover().ffmpeg)
@@ -134,15 +146,23 @@ pub fn measure_styled(
         }
     }
     ensure!(
-        !found || (x1 < width - 2 && y1 < height - 2),
+        !found || (y0 > 1 && y1 < height - 2),
         "字幕の計測範囲を超えました。"
     );
     let result = if found {
-        // Include the renderer's bearing/leading after the ASS anchor (64,64),
-        // not only the ink's own height. A tight title box must contain that offset too.
+        let centred_width = if x0 <= 1 || x1 >= width - 2 {
+            width
+        } else {
+            2 * ((width / 2).saturating_sub(x0)).max(x1.saturating_sub(width / 2) + 1)
+        };
+        // Include bearing/leading relative to the actual top or bottom ASS anchor.
         (
-            (x1 - x0 + 1).max(x1.saturating_sub(64) + 1),
-            (y1 - y0 + 1).max(y1.saturating_sub(64) + 1),
+            centred_width,
+            if bold {
+                (height - 64).saturating_sub(y0) + 1
+            } else {
+                y1.saturating_sub(64) + 1
+            },
         )
     } else {
         (0, 0)
