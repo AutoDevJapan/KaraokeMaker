@@ -311,6 +311,59 @@ mod timing_tests {
         }
     }
     #[test]
+    fn history_retains_exactly_one_hundred_edits_in_original_order() {
+        let mut draft = TimingDraft::from_lrc("[00:01.00]state-0\n[00:02.00]\n", 5.0).unwrap();
+        for index in 1..=150 {
+            draft
+                .replace(vec![line(1.0, 2.0, &format!("state-{index}"))])
+                .unwrap();
+        }
+        let json = draft.to_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["undo"].as_array().unwrap().len(), 100);
+        let mut restored = TimingDraft::from_json(&json, 5.0).unwrap();
+        for index in (50..150).rev() {
+            assert!(restored.undo());
+            assert_eq!(restored.lines()[0].text, format!("state-{index}"));
+        }
+        assert!(!restored.undo());
+        let mut unknown = value;
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(TimingDraft::from_json(&unknown.to_string(), 5.0).is_err());
+    }
+    #[test]
+    fn history_size_limit_accepts_exact_boundary_and_rejects_one_more_byte() {
+        const LIMIT: usize = 16 * 1024 * 1024;
+        let draft = TimingDraft::from_lrc("[00:01.00]line\n[00:02.00]\n", 5.0).unwrap();
+        let mut input = draft.to_json().unwrap();
+        input.extend(std::iter::repeat_n(' ', LIMIT - input.len()));
+        assert!(TimingDraft::from_json(&input, 5.0).is_ok());
+        input.push(' ');
+        assert!(TimingDraft::from_json(&input, 5.0).is_err());
+
+        // JSON escapes expand one valid LRC byte into six persisted bytes.
+        // Build a valid bounded history, then fill its JSON to the exact limit.
+        let mut large = draft;
+        let state = vec![line(1.0, 2.0, &"\u{0001}".repeat(60_000))];
+        large.lines = state.clone();
+        large.undo = vec![state; 45];
+        let size = large.to_json().unwrap().len();
+        assert!(size < LIMIT);
+        let remaining = LIMIT - size;
+        let mut remaining = remaining;
+        for lines in std::iter::once(&mut large.lines).chain(large.undo.iter_mut()) {
+            let count = remaining.min(5_000);
+            lines[0].text.push_str(&"x".repeat(count));
+            remaining -= count;
+        }
+        assert_eq!(remaining, 0);
+        let json = large.to_json().unwrap();
+        assert_eq!(json.len(), LIMIT);
+        assert!(TimingDraft::from_json(&json, 5.0).is_ok());
+        large.lines[0].text.push('x');
+        assert!(large.to_json().is_err());
+    }
+    #[test]
     fn corrupt_unsupported_or_excessive_history_cannot_be_restored() {
         let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
         draft.replace(vec![line(2.0, 3.0, "changed")]).unwrap();
