@@ -218,7 +218,15 @@ pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
         Ok(())
     })();
     drop(file);
-    match (result, fs::remove_file(&temporary)) {
+    history_save_result(result, &temporary, fs::remove_file(&temporary))
+}
+
+fn history_save_result(
+    result: Result<()>,
+    temporary: &Path,
+    cleanup: std::io::Result<()>,
+) -> Result<()> {
+    match (result, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) => Err(error),
         (result, Err(cleanup)) => Err(anyhow::anyhow!(
@@ -320,6 +328,37 @@ pub fn render_revision(
 #[cfg(test)]
 mod timing_tests {
     use super::*;
+    #[test]
+    fn history_cleanup_failure_retains_original_error_and_remaining_path() {
+        let path = Path::new("remaining-history.tmp");
+        let error = history_save_result(
+            Err(anyhow::anyhow!("original write error")),
+            path,
+            Err(std::io::Error::other("cleanup error")),
+        )
+        .unwrap_err()
+        .to_string();
+        for expected in [
+            "original write error",
+            "cleanup error",
+            "remaining-history.tmp",
+        ] {
+            assert!(error.contains(expected), "missing {expected}: {error}");
+        }
+        let error = history_save_result(Ok(()), path, Err(std::io::Error::other("cleanup error")))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("保存済み"));
+        assert!(error.contains("remaining-history.tmp"));
+        assert!(error.contains("cleanup error"));
+        assert!(history_save_result(Ok(()), path, Ok(())).is_ok());
+        assert_eq!(
+            history_save_result(Err(anyhow::anyhow!("original")), path, Ok(()))
+                .unwrap_err()
+                .to_string(),
+            "original"
+        );
+    }
     #[test]
     fn persisted_revision_history_reopens_and_preserves_undo() {
         let dir = tempfile::tempdir().unwrap();
