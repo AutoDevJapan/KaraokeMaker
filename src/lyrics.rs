@@ -286,6 +286,7 @@ pub fn make_ass_words(
                     let part_fill = fill * next / total - fill * consumed / total;
                     if i == 0 {
                         text.push_str(spacing);
+                        rendered_line.push_str(spacing);
                     }
                     text.push_str(&format!("{{\\kf{part_fill}}}{}", ass_fragment(part)));
                     rendered_line.push_str(part);
