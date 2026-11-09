@@ -41,6 +41,16 @@ jobs:
           New-Item -ItemType Directory dist/KaraokeMaker/third-party/demucs-core | Out-Null
           Copy-Item vendor/demucs-core/LICENSE,vendor/demucs-core/UPSTREAM.md dist/KaraokeMaker/third-party/demucs-core/
           Copy-Item third-party/RUST-NOTICES.txt dist/KaraokeMaker/third-party/RUST-NOTICES.txt
+          $noticeText = Get-Content third-party/RUST-NOTICES.txt -Raw
+          if ($noticeText -match '<year>|<copyright holders>|<owner>') { throw 'Unresolved generic copyright notice' }
+          $provenance = Get-Content third-party/fixed-notices/provenance.json -Raw | ConvertFrom-Json
+          foreach ($entry in $provenance) {
+            $source = Join-Path third-party/fixed-notices "$($entry.crate)-$($entry.version)/$($entry.file)"
+            $bytes = [Text.Encoding]::UTF8.GetBytes(([IO.File]::ReadAllText((Resolve-Path $source))).Replace("`r`n", "`n"))
+            $actual = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLower()
+            if ($actual -ne $entry.sha256) { throw "Changed fixed notice: $($entry.crate) $($entry.file)" }
+          }
+          Copy-Item third-party/fixed-notices dist/KaraokeMaker/third-party/fixed-notices -Recurse
           foreach ($doc in Get-ChildItem dist/KaraokeMaker -Filter '*.md' -Recurse) {
             foreach ($match in [regex]::Matches((Get-Content $doc.FullName -Raw), '\]\(([^)]+)\)')) {
               $link = $match.Groups[1].Value
