@@ -423,82 +423,6 @@ fn glyph_clusters(line: &str) -> Vec<(String, f64)> {
     clusters
 }
 
-/// Greedy line filling: breaks at spaces and between non-ASCII clusters, splitting an ASCII
-/// word only when it is wider than a whole line.
-#[cfg(test)]
-fn fill_lines(line: &str, budget: f64) -> Vec<String> {
-    // Units: ASCII words stay whole, every other cluster stands alone, spaces separate.
-    let mut units: Vec<(String, f64, bool)> = Vec::new();
-    for (text, width) in glyph_clusters(line) {
-        let ascii_word = text.chars().all(|c| c.is_ascii() && c != ' ');
-        match units.last_mut() {
-            Some(last) if ascii_word && last.2 => {
-                last.0.push_str(&text);
-                last.1 += width;
-            }
-            _ => units.push((text, width, ascii_word)),
-        }
-    }
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut used = 0.0;
-    let mut push_line = |current: &mut String, used: &mut f64| {
-        lines.push(current.trim_end().to_string());
-        current.clear();
-        *used = 0.0;
-    };
-    for (text, width, ascii_word) in units {
-        let space = text == " ";
-        if space && current.is_empty() {
-            continue;
-        }
-        if used + width > budget && !current.is_empty() && !space {
-            push_line(&mut current, &mut used);
-        }
-        if ascii_word && width > budget {
-            // A word wider than a line: split it by characters.
-            for (piece, piece_width) in glyph_clusters(&text) {
-                if used + piece_width > budget && !current.is_empty() {
-                    push_line(&mut current, &mut used);
-                }
-                current.push_str(&piece);
-                used += piece_width;
-            }
-            continue;
-        }
-        current.push_str(&text);
-        used += width;
-    }
-    lines.push(current.trim_end().to_string());
-    lines
-}
-
-/// Break text into lines whose estimated width (full-width glyph = 1, ASCII = 0.6) fits the
-/// budget, then even them out so that no line is left with a stray last character.
-#[cfg(test)]
-fn wrap_to_width(text: &str, budget: f64) -> Vec<String> {
-    let mut lines = Vec::new();
-    for line in text.split('\n') {
-        let greedy = fill_lines(line, budget);
-        let count = greedy.len();
-        if count < 2 {
-            lines.extend(greedy);
-            continue;
-        }
-        // The narrowest width that still gives the same number of lines.
-        let (mut low, mut high) = (budget / count as f64, budget);
-        for _ in 0..24 {
-            let middle = (low + high) / 2.0;
-            if fill_lines(line, middle).len() <= count {
-                high = middle;
-            } else {
-                low = middle;
-            }
-        }
-        lines.extend(fill_lines(line, high));
-    }
-    lines
-}
 pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
     make_ass_styled(
         title,
@@ -1053,49 +977,6 @@ mod tests {
         let (a, b) = (title_margins(&plain), title_margins(&with_logo));
         assert!(b[0] >= a[0] + 150 && b[1] >= a[1] + 150, "{a:?} {b:?}");
         assert_eq!(b[2], a[2]);
-    }
-    #[test]
-    fn wrapping_balances_lines_and_never_splits_what_belongs_together() {
-        // 20 full-width characters over a budget of 19: two even lines, not 19 + 1.
-        let lines = wrap_to_width("あいうえおかきくけこさしすせそたちつてと", 19.0);
-        assert_eq!(lines.len(), 2);
-        assert!(lines.iter().all(|l| l.chars().count() >= 9), "{lines:?}");
-        // English breaks at spaces only; no word is cut and no space is left at a line end.
-        let text = "neon lights tonight and more neon lights tonight";
-        let lines = wrap_to_width(text, 14.0);
-        assert!(lines.len() > 1);
-        assert_eq!(lines.join(" "), text, "{lines:?}");
-        assert!(lines.iter().all(|l| l == l.trim()), "{lines:?}");
-        // A combining voiced mark never starts a line.
-        let lines = wrap_to_width(&"か\u{3099}".repeat(30), 21.0);
-        assert!(lines.len() > 1);
-        assert!(
-            lines.iter().all(|l| !l.starts_with('\u{3099}')),
-            "{lines:?}"
-        );
-        assert!(
-            lines.iter().all(|l| l.chars().count() % 2 == 0),
-            "{lines:?}"
-        );
-        // ZWJ emoji and flags stay whole.
-        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
-        let lines = wrap_to_width(&family.repeat(12), 5.0);
-        assert!(lines.len() > 1);
-        assert!(
-            lines.iter().all(|l| l.chars().count() % 5 == 0),
-            "{lines:?}"
-        );
-        let lines = wrap_to_width(&"\u{1F1FA}\u{1F1F8}".repeat(12), 5.0);
-        assert!(
-            lines.iter().all(|l| l.chars().count() % 2 == 0),
-            "{lines:?}"
-        );
-        // Closing punctuation stays with the text before it.
-        let lines = wrap_to_width(&format!("{}。", "あ".repeat(10)), 10.0);
-        assert!(lines.iter().all(|l| !l.starts_with('。')), "{lines:?}");
-        // A single word wider than a line is split instead of overflowing.
-        let lines = wrap_to_width("supercalifragilisticexpialidocious", 10.0);
-        assert!(lines.len() > 1 && lines.concat() == "supercalifragilisticexpialidocious");
     }
     #[test]
     fn template_margins_apply_per_orientation_and_never_shrink_safe_area() {

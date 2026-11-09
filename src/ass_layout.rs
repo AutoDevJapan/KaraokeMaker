@@ -138,7 +138,12 @@ pub fn measure_styled(
         "字幕の計測範囲を超えました。"
     );
     let result = if found {
-        (x1 - x0 + 1, y1 - y0 + 1)
+        // Include the renderer's bearing/leading after the ASS anchor (64,64),
+        // not only the ink's own height. A tight title box must contain that offset too.
+        (
+            (x1 - x0 + 1).max(x1.saturating_sub(64) + 1),
+            (y1 - y0 + 1).max(y1.saturating_sub(64) + 1),
+        )
     } else {
         (0, 0)
     };
