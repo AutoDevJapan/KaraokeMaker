@@ -677,21 +677,24 @@ fn local_manual_review_roundtrips_and_rejects_stale_or_incomplete_forms() {
     assert_eq!(report.automatic_result, "pass");
     let saved = serde_json::to_value(&report).unwrap();
     assert_eq!(saved["operator_review"]["notes"], form.notes);
+    // Each hash negative starts from the exact complete form accepted above.
+    let baseline = form.clone();
     form.source_sha256 = "wrong-source".into();
     fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
     assert!(report.read_manual_review(&form_path).is_err());
-    form = report.manual_form();
-    form.reviewer = "test operator".into();
-    form.reviewed_at = "2026-11-09".into();
-    form.full_listening = "pass".into();
-    form.full_visual_check = "pass".into();
+    form = baseline.clone();
     form.files.clear();
     fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
     assert!(report.read_manual_review(&form_path).is_err());
-    form = report.manual_form();
+    form = baseline.clone();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    report.read_manual_review(&form_path).unwrap();
     form.settings_sha256 = Some("old-settings".into());
     fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
-    assert!(report.read_manual_review(&form_path).is_err());
+    assert!(
+        report.read_manual_review(&form_path).is_err(),
+        "settings hash mismatch must be rejected even when every other field is valid"
+    );
     assert!(
         report
             .record_context(Some(&dir.join("missing")), None, None)
