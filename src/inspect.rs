@@ -7,7 +7,7 @@ use crate::{
     presentation::VideoPreset,
 };
 use anyhow::{Context, Result, bail, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -70,10 +70,38 @@ pub struct ManualCheck {
     pub id: &'static str,
     pub description: &'static str,
     pub status: &'static str,
+    pub reviewer: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SettingsRecord {
+    pub path: String,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+/// A local operator-authored sidecar. Names are declarations, not authenticated identities.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManualReview {
+    pub source_sha256: String,
+    pub settings_sha256: Option<String>,
+    pub files: std::collections::BTreeMap<String, String>,
+    pub reviewer: String,
+    pub reviewed_at: String,
+    pub full_listening: String,
+    pub full_visual_check: String,
+    pub notes: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct Report {
+    pub operator_review: Option<ManualReview>,
+    pub settings: Option<SettingsRecord>,
+    pub delivery_method: Option<String>,
+    pub volume_adjustment: Option<String>,
     pub schema: &'static str,
     pub inspected_at_unix: u64,
     pub ffmpeg: String,
@@ -100,6 +128,72 @@ pub struct Criteria {
 }
 
 impl Report {
+    pub fn manual_form(&self) -> Result<ManualReview> {
+        let settings = self
+            .settings
+            .as_ref()
+            .context("人手確認の記録には設定ファイルが必要です。--settingsを指定してください。")?;
+        Ok(ManualReview {
+            source_sha256: self.source.sha256.clone(),
+            settings_sha256: Some(settings.sha256.clone()),
+            files: self
+                .files
+                .iter()
+                .map(|f| (f.path.clone(), f.sha256.clone()))
+                .collect(),
+            reviewer: String::new(),
+            reviewed_at: String::new(),
+            full_listening: "unchecked".into(),
+            full_visual_check: "unchecked".into(),
+            notes: String::new(),
+        })
+    }
+    pub fn read_manual_review(&mut self, path: &Path) -> Result<()> {
+        self.operator_review = None;
+        let review: ManualReview = serde_json::from_slice(&fs::read(path)?)?;
+        let expected = self.manual_form()?;
+        ensure!(
+            review.source_sha256 == expected.source_sha256
+                && review.settings_sha256 == expected.settings_sha256
+                && review.files == expected.files,
+            "人手確認の対象ハッシュが今回の検査対象と一致しません。"
+        );
+        ensure!(
+            !review.reviewer.trim().is_empty() && !review.reviewed_at.trim().is_empty(),
+            "確認者と確認日時を記入してください。"
+        );
+        ensure!(
+            [&review.full_listening, &review.full_visual_check]
+                .iter()
+                .all(|s| matches!(s.as_str(), "pass" | "fail")),
+            "全編試聴と字幕目視をpassまたはfailで記入してください。"
+        );
+        // Keep automatic pass and manual_review_complete unchanged: this is an operator
+        // declaration preserved verbatim, not an authenticated human sign-off.
+        self.operator_review = Some(review);
+        Ok(())
+    }
+    /// Operator-provided context is recorded without treating it as automatic approval.
+    pub fn record_context(
+        &mut self,
+        settings: Option<&Path>,
+        delivery: Option<String>,
+        volume: Option<String>,
+    ) -> Result<()> {
+        self.settings = settings
+            .map(|path| -> Result<_> {
+                let (sha256, bytes) = sha256(path)?;
+                Ok(SettingsRecord {
+                    path: display(path),
+                    sha256,
+                    bytes,
+                })
+            })
+            .transpose()?;
+        self.delivery_method = delivery;
+        self.volume_adjustment = volume;
+        Ok(())
+    }
     pub fn passed(&self) -> bool {
         self.files.iter().all(|f| f.passed)
     }
@@ -115,7 +209,7 @@ fn manual_checks() -> Vec<ManualCheck> {
         ("delivery_scope", "正しい案件のファイルか、権利・用途・クレジット・実績掲載許可を照合する"),
     ]
     .into_iter()
-    .map(|(id, description)| ManualCheck { id, description, status: "unchecked" })
+    .map(|(id, description)| ManualCheck { id, description, status: "unchecked", reviewer: None, reviewed_at: None, notes: None })
     .collect()
 }
 
@@ -573,6 +667,10 @@ pub fn inspect(
     let (after, _) = sha256(&source)?;
     ensure!(after == source_hash, "検査中に元音源が変更されました。");
     let mut report = Report {
+        operator_review: None,
+        settings: None,
+        delivery_method: None,
+        volume_adjustment: None,
         schema: SCHEMA,
         inspected_at_unix: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         ffmpeg: first_line(&tools.ffmpeg),

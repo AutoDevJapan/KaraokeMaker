@@ -635,3 +635,153 @@ fn a_quicktime_file_renamed_mp4_and_low_rate_mono_aac_fail_the_delivery_contract
         ["sample_rate_48000", "channels_stereo"]
     );
 }
+
+#[test]
+fn local_manual_review_roundtrips_and_rejects_stale_or_incomplete_forms() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let source = source(dir);
+    let wav = good_wav(dir);
+    let items = [Deliverable {
+        kind: Kind::Wav,
+        path: wav,
+    }];
+    let mut report =
+        inspect::inspect(&Tools::discover(), &source, &items, VideoPreset::Hd).unwrap();
+    let settings = dir.join("settings.json");
+    fs::write(&settings, b"{}").unwrap();
+    report
+        .record_context(
+            Some(&settings),
+            Some("agreed transfer".into()),
+            Some("no gain change".into()),
+        )
+        .unwrap();
+    assert_eq!(report.settings.as_ref().unwrap().bytes, 2);
+    let form_path = dir.join("manual.json");
+    let mut form = report.manual_form().unwrap();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(report.read_manual_review(&form_path).is_err());
+    form.reviewer = "test operator".into();
+    form.reviewed_at = "2026-11-09T23:00:00+09:00".into();
+    form.full_listening = "pass".into();
+    form.full_visual_check = "fail".into();
+    form.notes = "Synthetic test declaration; not a real listening approval".into();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    report.read_manual_review(&form_path).unwrap();
+    assert_eq!(
+        report.operator_review.as_ref().unwrap().full_visual_check,
+        "fail"
+    );
+    assert!(!report.manual_review_complete);
+    assert_eq!(report.automatic_result, "pass");
+    let saved = serde_json::to_value(&report).unwrap();
+    assert_eq!(saved["operator_review"]["notes"], form.notes);
+    // Each hash negative starts from the exact complete form accepted above.
+    let baseline = form.clone();
+    form.source_sha256 = "wrong-source".into();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(report.read_manual_review(&form_path).is_err());
+    form = baseline.clone();
+    form.files.clear();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(report.read_manual_review(&form_path).is_err());
+    form = baseline.clone();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    report.read_manual_review(&form_path).unwrap();
+    form.settings_sha256 = Some("old-settings".into());
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(
+        report.read_manual_review(&form_path).is_err(),
+        "settings hash mismatch must be rejected even when every other field is valid"
+    );
+    // Omitting settings on both sides must not turn a missing binding into a match.
+    report.record_context(None, None, None).unwrap();
+    assert!(report.manual_form().is_err());
+    form = baseline;
+    form.settings_sha256 = None;
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(
+        report.read_manual_review(&form_path).is_err(),
+        "null settings hashes must not count as a bound manual review"
+    );
+    assert!(report.operator_review.is_none());
+    assert!(
+        report
+            .record_context(Some(&dir.join("missing")), None, None)
+            .is_err()
+    );
+}
+
+#[test]
+fn cli_manual_reviews_require_settings_and_reject_settings_only_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let source = source(dir);
+    let wav = good_wav(dir);
+    let settings = dir.join("settings.json");
+    fs::write(&settings, b"{}").unwrap();
+    let form_path = dir.join("manual.json");
+    let cli = |args: &[&str]| {
+        karaoke_maker::media::hidden_command(env!("CARGO_BIN_EXE_karaoke-maker-cli"))
+            .arg("--data")
+            .arg(dir.join("data"))
+            .args(["inspect-delivery", "--source"])
+            .arg(&source)
+            .arg("--wav")
+            .arg(&wav)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for option in ["--manual-form", "--manual-review"] {
+        let output = cli(&[option, form_path.to_str().unwrap()]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("--settings"));
+        assert!(
+            !form_path.exists(),
+            "missing settings must not write a form"
+        );
+    }
+    let output = cli(&[
+        "--settings",
+        settings.to_str().unwrap(),
+        "--manual-form",
+        form_path.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut form: inspect::ManualReview =
+        serde_json::from_slice(&fs::read(&form_path).unwrap()).unwrap();
+    assert!(form.settings_sha256.is_some());
+    form.reviewer = "automated fixture".into();
+    form.reviewed_at = "2026-11-10T03:00:00+09:00".into();
+    form.full_listening = "pass".into();
+    form.full_visual_check = "fail".into();
+    form.notes = "Synthetic declaration, not human acceptance".into();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    let args = [
+        "--settings",
+        settings.to_str().unwrap(),
+        "--manual-review",
+        form_path.to_str().unwrap(),
+    ];
+    let output = cli(&args);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["operator_review"]["full_visual_check"], "fail");
+    assert_eq!(report["manual_review_complete"], false);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("人手確認に不合格"));
+    // Every other input is unchanged from the fully accepted baseline.
+    fs::write(&settings, b"{} ").unwrap();
+    let output = cli(&args);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("対象ハッシュ"));
+}
