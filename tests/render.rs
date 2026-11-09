@@ -805,6 +805,8 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
         key: 3,
         tempo: 1.25,
         sample_rate: 44100,
+        separation: karaoke_maker::model::SeparationModel::Standard,
+        automatic_subtitles: false,
         lyrics: "[00:00.50]before\n[00:02.00]next".into(),
         ..Options::default()
     };
@@ -839,6 +841,18 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
         &Progress::default(),
     )
     .unwrap();
+    let saved: Options =
+        serde_json::from_slice(&fs::read(revised.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(
+        (saved.separation, saved.automatic_subtitles),
+        (options.separation, false),
+        "reused stems keep their actual model and a lyric revision never runs ASR"
+    );
+    assert_eq!(
+        (saved.key, saved.tempo),
+        (0, 1.0),
+        "already-adjusted audio is not shifted twice"
+    );
     let mut history = revision::load_history(&revised, 3.2).unwrap().unwrap();
     assert_eq!(history.lines()[0].text, "corrected");
     assert!(history.undo());
