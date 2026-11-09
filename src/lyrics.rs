@@ -145,7 +145,7 @@ fn measured_lines_styled(
 ) -> Result<Vec<String>> {
     let mut result = Vec::new();
     for line in text.split('\n') {
-        let clusters: Vec<_> = glyph_clusters(line).into_iter().map(|c| c.0).collect();
+        let clusters = glyph_clusters(line);
         let mut start = 0;
         if clusters.is_empty() {
             result.push(String::new());
@@ -275,7 +275,14 @@ pub fn make_ass_words(
                     displayed_lines.push(std::mem::take(&mut rendered_line));
                 }
                 let fragments = measured_lines(&word.text, &style.font, size, outline, budget)?;
-                let total = word.text.chars().count().max(1) as u64;
+                let weights = fragments
+                    .iter()
+                    .map(|part| {
+                        crate::ass_layout::measure(&style.font, size, outline, part)
+                            .map(|m| u64::from(m.0.max(1)))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let total: u64 = weights.iter().sum();
                 let mut consumed = 0u64;
                 for (i, part) in fragments.iter().enumerate() {
                     if i > 0 {
@@ -283,7 +290,7 @@ pub fn make_ass_words(
                         lines += 1;
                         displayed_lines.push(std::mem::take(&mut rendered_line));
                     }
-                    let next = consumed + part.chars().count() as u64;
+                    let next = consumed + weights[i];
                     let part_fill = fill * next / total - fill * consumed / total;
                     if i == 0 {
                         text.push_str(spacing);
@@ -387,15 +394,14 @@ pub fn to_lrc(cues: &[Cue]) -> String {
 /// A glyph cluster that must not be split: a base character with its combining marks,
 /// a ZWJ sequence, or a pair of regional indicators. Closing punctuation joins the cluster
 /// before it so that a line never starts with it.
-fn glyph_clusters(line: &str) -> Vec<(String, f64)> {
-    let mut clusters: Vec<(String, f64)> = Vec::new();
+fn glyph_clusters(line: &str) -> Vec<String> {
+    let mut clusters: Vec<String> = Vec::new();
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
         let closing = "。、，．,.）)」』】〕〉》！？!?:;；：…‥";
         if closing.contains(c) && !clusters.is_empty() {
             let last = clusters.last_mut().unwrap();
-            last.0.push(c);
-            last.1 += if c.is_ascii() { 0.6 } else { 1.0 };
+            last.push(c);
             continue;
         }
         let mut text = c.to_string();
@@ -420,8 +426,7 @@ fn glyph_clusters(line: &str) -> Vec<(String, f64)> {
                 text.push(joined);
             }
         }
-        let width = if c.is_ascii() { 0.6 } else { 1.0 };
-        clusters.push((text, width));
+        clusters.push(text);
     }
     clusters
 }
@@ -584,7 +589,7 @@ fn ass_with_layout(
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
     let title_size = scaled(28.0);
-    // With a template, lines are broken here by estimated glyph width (10% headroom) and
+    // With a template, lines are broken using the selected renderer/font's measured width and
     // libass automatic wrapping is turned off, because its Japanese wrapping can exceed
     // the margins. Word-timed subtitles are broken the same way in make_ass_words.
     let fixed_wrap = template.is_some();
@@ -858,10 +863,10 @@ mod tests {
             );
         }
         t.max_lines = 4;
-        let english = "hello world this is a long synthetic phrase for karaoke";
+        let english = " hello world this is a long synthetic phrase for karaoke ".repeat(3);
         let ass = make_ass_words(
             "",
-            &word(english.into()),
+            &word(english.clone()),
             1.0,
             1.0,
             VideoPreset::FullHd,
@@ -870,6 +875,10 @@ mod tests {
         )
         .unwrap();
         let line = ass.lines().find(|l| l.starts_with("Dialogue: 1")).unwrap();
+        assert!(
+            line.contains("\\N"),
+            "the space-preservation fixture must exercise actual wrapping"
+        );
         let payload = line.splitn(10, ',').nth(9).unwrap();
         let mut plain = String::new();
         let mut tag = false;
@@ -885,7 +894,7 @@ mod tests {
         assert_eq!(plain.replace("\\N", ""), english);
         let clusters = glyph_clusters(&"👍🏽".repeat(20));
         assert_eq!(clusters.len(), 20);
-        assert!(clusters.iter().all(|c| c.0 == "👍🏽"));
+        assert!(clusters.iter().all(|c| c == "👍🏽"));
     }
     #[test]
     fn explicit_title_overflow_is_rejected_and_vertical_separation_from_logo_is_allowed() {
@@ -994,6 +1003,21 @@ mod tests {
             let line = ass.lines().find(|l| l.starts_with("Dialogue: 1")).unwrap();
             assert!(line.contains("\\N"));
             assert!(line.matches("\\kf").count() > 1);
+            let sum: u64 = line
+                .split("\\kf")
+                .skip(1)
+                .map(|tag| {
+                    tag.chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect::<String>()
+                        .parse::<u64>()
+                        .unwrap()
+                })
+                .sum();
+            assert_eq!(
+                sum, 80,
+                "display fragment durations must sum to the original word interval"
+            );
             assert!(line.contains("0:00:00.10,0:00:00.90"));
             t.max_lines = 1;
             assert!(make_ass_words("曲", &words, 1.0, 1.0, preset, &t.style, Some(&t)).is_err());
