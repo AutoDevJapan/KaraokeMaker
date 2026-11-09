@@ -112,6 +112,21 @@ enum Mode {
     /// 納品物（動画・WAV・MP3）の形式・長さ・全編復号・true peakを検査し、結果をJSONで残します。
     /// 検査対象は変更しません。不合格があれば終了コード1です。
     InspectDelivery {
+        /// Write a local editable manual-review JSON form (never overwrites).
+        #[arg(long)]
+        manual_form: Option<PathBuf>,
+        /// Read an operator-authored review, bound to this source/settings/output hash set.
+        #[arg(long)]
+        manual_review: Option<PathBuf>,
+        /// Settings used to produce the deliverables (SHA-256 recorded).
+        #[arg(long)]
+        settings: Option<PathBuf>,
+        /// Agreed delivery method; no upload is performed.
+        #[arg(long)]
+        delivery_method: Option<String>,
+        /// Whether and how volume was adjusted; operator-provided record.
+        #[arg(long)]
+        volume_adjustment: Option<String>,
         /// 元の音源（長さの基準）
         #[arg(long)]
         source: PathBuf,
@@ -214,6 +229,11 @@ fn run() -> Result<()> {
             );
         }
         Mode::InspectDelivery {
+            manual_form,
+            manual_review,
+            settings,
+            delivery_method,
+            volume_adjustment,
             source,
             video,
             wav,
@@ -235,7 +255,20 @@ fn run() -> Result<()> {
                     .collect();
             let tools = Tools::discover();
             tools.check()?;
-            let report = crate::inspect::inspect(&tools, &source, &items, preset)?;
+            let mut report = crate::inspect::inspect(&tools, &source, &items, preset)?;
+            report.record_context(settings.as_deref(), delivery_method, volume_adjustment)?;
+            if let Some(path) = manual_review {
+                report.read_manual_review(&path)?;
+            }
+            if let Some(path) = manual_form {
+                use std::io::Write;
+                let bytes = serde_json::to_vec_pretty(&report.manual_form())?;
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(path)?
+                    .write_all(&bytes)?;
+            }
             let json = serde_json::to_vec_pretty(&report)?;
             if let Some(path) = output {
                 use std::io::Write;

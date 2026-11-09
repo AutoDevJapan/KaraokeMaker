@@ -635,3 +635,66 @@ fn a_quicktime_file_renamed_mp4_and_low_rate_mono_aac_fail_the_delivery_contract
         ["sample_rate_48000", "channels_stereo"]
     );
 }
+
+#[test]
+fn local_manual_review_roundtrips_and_rejects_stale_or_incomplete_forms() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let source = source(dir);
+    let wav = good_wav(dir);
+    let items = [Deliverable {
+        kind: Kind::Wav,
+        path: wav,
+    }];
+    let mut report =
+        inspect::inspect(&Tools::discover(), &source, &items, VideoPreset::Hd).unwrap();
+    let settings = dir.join("settings.json");
+    fs::write(&settings, b"{}").unwrap();
+    report
+        .record_context(
+            Some(&settings),
+            Some("agreed transfer".into()),
+            Some("no gain change".into()),
+        )
+        .unwrap();
+    assert_eq!(report.settings.as_ref().unwrap().bytes, 2);
+    let form_path = dir.join("manual.json");
+    let mut form = report.manual_form();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(report.read_manual_review(&form_path).is_err());
+    form.reviewer = "test operator".into();
+    form.reviewed_at = "2026-11-09T23:00:00+09:00".into();
+    form.full_listening = "pass".into();
+    form.full_visual_check = "fail".into();
+    form.notes = "Synthetic test declaration; not a real listening approval".into();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    report.read_manual_review(&form_path).unwrap();
+    assert_eq!(
+        report.operator_review.as_ref().unwrap().full_visual_check,
+        "fail"
+    );
+    assert!(!report.manual_review_complete);
+    assert_eq!(report.automatic_result, "pass");
+    let saved = serde_json::to_value(&report).unwrap();
+    assert_eq!(saved["operator_review"]["notes"], form.notes);
+    form.source_sha256 = "wrong-source".into();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(report.read_manual_review(&form_path).is_err());
+    form = report.manual_form();
+    form.reviewer = "test operator".into();
+    form.reviewed_at = "2026-11-09".into();
+    form.full_listening = "pass".into();
+    form.full_visual_check = "pass".into();
+    form.files.clear();
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(report.read_manual_review(&form_path).is_err());
+    form = report.manual_form();
+    form.settings_sha256 = Some("old-settings".into());
+    fs::write(&form_path, serde_json::to_vec(&form).unwrap()).unwrap();
+    assert!(report.read_manual_review(&form_path).is_err());
+    assert!(
+        report
+            .record_context(Some(&dir.join("missing")), None, None)
+            .is_err()
+    );
+}

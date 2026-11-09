@@ -112,6 +112,14 @@ karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery
 
 利用する版とライセンスは [dependencies.md](dependencies.md) を参照する。
 
+### 設定・納品方法と全編の人手確認を残す
+
+`inspect-delivery` に `--settings ./edit/settings.json` を指定すると、設定のSHA-256とバイト数も記録する。`--delivery-method` は合意した受け渡し方法、`--volume-adjustment` は音量調整の有無と内容を記す文字列であり、アップロードや音量変更は行わない。省略時は未記録（null）のままで、推測で埋めない。
+
+同じ検査に `--manual-form ./delivery/manual.json` を指定して、PC内の編集用JSONを新規作成する。全編を確認した担当が `reviewer`・`reviewed_at`・`full_listening`・`full_visual_check`・`notes` を記入する。試聴・目視の結果は `pass` または `fail`。ハッシュとファイル一覧は変更しない。
+
+記入後、同じsource・settings・納品物を指定した検査に `--manual-review ./delivery/manual.json` を加えて、別名の検査JSONへ保存する。今回計算した原音・設定・全納品物のハッシュと完全一致しない記録、未記入の結果、確認者・日時が空の記録は拒否する。記入内容は `operator_review` に保持する。確認者名は自己申告で、認証済み署名ではない。`manual_review_complete` と自動検査の意味は変えず、人手の不合格も消さない。原音や納品物を変更したら再確認し、新しい記録を作る。記録には非公開の素材パスや担当名が含まれるので、Gitや公開Issueに追加しない。
+
 ## 担当が作った動作確認動画の片付け（2026-10-08）
 
 担当が作成した動作例・検証録画は、検査と報告が終わり、制作中やアプリで使う最新ファイルでないことを確認してから、`D:/CC/Tools/video-archive/video-archive.exe register`へ登録する。ユーザーが持ち込んだ原曲・動画・歌詞、顧客資源、現在利用している最新の変換結果は登録・転送・削除しない。既存の外部AIへ素材を送らない規則を維持する。
