@@ -64,6 +64,14 @@ impl Template {
 }
 
 fn write_new(path: &Path, write: impl FnOnce(&mut fs::File) -> std::io::Result<()>) -> Result<()> {
+    write_new_with(path, write, |path| fs::remove_file(path))
+}
+
+fn write_new_with(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> std::io::Result<()>,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<()> {
     let mut output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -71,7 +79,7 @@ fn write_new(path: &Path, write: impl FnOnce(&mut fs::File) -> std::io::Result<(
     let result = write(&mut output).and_then(|()| output.sync_all());
     drop(output);
     if let Err(error) = result {
-        if let Err(cleanup) = fs::remove_file(path) {
+        if let Err(cleanup) = remove(path) {
             return Err(error).map_err(|error| anyhow::anyhow!("保存に失敗しました: {error}。未完成ファイル {} の回収にも失敗しました: {cleanup}", path.display()));
         }
         return Err(error.into());
@@ -95,6 +103,25 @@ mod tests {
         }
     }
     #[test]
+    fn failed_cleanup_reports_original_error_and_remaining_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.json");
+        let error = write_new_with(
+            &path,
+            |file| {
+                file.write_all(b"partial")?;
+                Err(std::io::Error::other("original write failure"))
+            },
+            |_| Err(std::io::Error::other("cleanup failure")),
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("original write failure"));
+        assert!(message.contains("cleanup failure"));
+        assert!(message.contains(&path.display().to_string()));
+        assert_eq!(fs::read(&path).unwrap(), b"partial");
+    }
+    #[test]
     fn interrupted_new_write_is_removed_and_existing_file_is_preserved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("template.json");
@@ -103,6 +130,12 @@ mod tests {
             Err(std::io::Error::other("injected write failure"))
         });
         assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("injected write failure")
+        );
         assert!(!path.exists());
         fs::write(&path, b"original").unwrap();
         let mut called = false;
