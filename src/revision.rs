@@ -66,6 +66,14 @@ impl TimingDraft {
         &self.lines
     }
 
+    pub fn duration(&self) -> f64 {
+        self.duration
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
     pub fn from_lrc(text: &str, duration: f64) -> Result<Self> {
         Ok(Self {
             lines: timed_lines_from_lrc(text, duration)?,
@@ -281,12 +289,49 @@ pub fn editable_lrc(options: &Options) -> Result<String> {
     Ok(lrc)
 }
 
+/// Read the persisted editor timeline, or the original lyrics for older results.
+/// Invalid saved history is never replaced with the original lyrics.
+pub fn load_timing_draft(source: &Path) -> Result<TimingDraft> {
+    let previous: Options = serde_json::from_slice(&fs::read(source.join("settings.json"))?)?;
+    previous.validate()?;
+    let duration = media::probe(&media::Tools::discover(), &source.join("karaoke.wav"))?.duration;
+    match load_history(source, duration)? {
+        Some(draft) => Ok(draft),
+        None => TimingDraft::from_lrc(&editable_lrc(&previous)?, duration),
+    }
+}
+
+/// Undo into a new output directory. The source result remains immutable, and
+/// the popped history is saved without pushing the discarded edit again.
+pub fn render_undo_revision(
+    source: &Path,
+    dir: &Path,
+    preset: VideoPreset,
+    progress: &Progress,
+) -> Result<()> {
+    let mut draft = load_timing_draft(source)?;
+    ensure!(draft.undo(), "取り消す編集履歴がありません。");
+    let text = draft.lrc()?;
+    render_revision_inner(source, dir, &text, preset, progress, Some(draft))
+}
+
 pub fn render_revision(
     source: &Path,
     dir: &Path,
     text: &str,
     preset: VideoPreset,
     progress: &Progress,
+) -> Result<()> {
+    render_revision_inner(source, dir, text, preset, progress, None)
+}
+
+fn render_revision_inner(
+    source: &Path,
+    dir: &Path,
+    text: &str,
+    preset: VideoPreset,
+    progress: &Progress,
+    prepared_history: Option<TimingDraft>,
 ) -> Result<()> {
     let previous: Options = serde_json::from_slice(&fs::read(source.join("settings.json"))?)?;
     previous.validate()?;
@@ -306,11 +351,20 @@ pub fn render_revision(
         let duration =
             media::probe(&media::Tools::discover(), &source.join("karaoke.wav"))?.duration;
         let lines = timed_lines_from_lrc(text, duration)?;
-        let mut draft = match load_history(source, duration)? {
-            Some(draft) => draft,
-            None => initial_history_draft(&previous, text, duration)?,
+        let draft = match prepared_history {
+            Some(draft) => {
+                ensure!(draft.duration == duration, "曲の長さが一致しません。");
+                draft
+            }
+            None => {
+                let mut draft = match load_history(source, duration)? {
+                    Some(draft) => draft,
+                    None => initial_history_draft(&previous, text, duration)?,
+                };
+                draft.replace(lines)?;
+                draft
+            }
         };
-        draft.replace(lines)?;
         save_history_new(dir, &draft)?;
     }
     for (input, output) in [

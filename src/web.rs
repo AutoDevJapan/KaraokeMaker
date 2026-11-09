@@ -54,7 +54,7 @@ pub struct App {
     busy: Arc<Semaphore>,
     shutdown: Arc<Notify>,
     worker: Arc<Mutex<Option<JoinHandle<()>>>>,
-    revision_sources: Arc<Mutex<std::collections::HashSet<String>>>,
+    revision_sources: Arc<Mutex<BTreeMap<String, usize>>>,
 }
 
 impl App {
@@ -100,7 +100,7 @@ impl App {
             busy: Arc::new(Semaphore::new(1)),
             shutdown: Arc::new(Notify::new()),
             worker: Arc::new(Mutex::new(None)),
-            revision_sources: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            revision_sources: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
     fn directory(&self, id: &str) -> Result<PathBuf> {
@@ -201,12 +201,14 @@ pub fn router(app: App) -> Router {
         .route("/", get(home))
         .route("/jobs", post(upload))
         .route("/jobs/{id}", get(job_page))
+        .route("/jobs/{id}/timing", get(timing))
         .route("/jobs/{id}/{name}", get(artifact))
         .route("/cancel/{id}", post(cancel))
         .route(
             "/revise/{id}",
             post(revise).layer(DefaultBodyLimit::max(256 * 1024)),
         )
+        .route("/undo/{id}", post(undo).layer(DefaultBodyLimit::max(4096)))
         .route("/delete/{id}", post(delete))
         .route("/shutdown", post(shutdown))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 128 * 1024))
@@ -546,16 +548,30 @@ struct RevisionForm {
     preset: String,
 }
 
+#[derive(Deserialize)]
+struct UndoForm {
+    csrf: String,
+    preset: String,
+}
+
+enum RevisionEdit {
+    Lyrics(String),
+    Undo,
+}
+
 struct SourceLease {
-    sources: Arc<Mutex<std::collections::HashSet<String>>>,
+    sources: Arc<Mutex<BTreeMap<String, usize>>>,
     id: String,
 }
 impl Drop for SourceLease {
     fn drop(&mut self) {
-        self.sources
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.id);
+        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = sources.get_mut(&self.id) {
+            *count -= 1;
+            if *count == 0 {
+                sources.remove(&self.id);
+            }
+        }
     }
 }
 
@@ -564,7 +580,69 @@ async fn revise(
     WebPath(source_id): WebPath<String>,
     Form(form): Form<RevisionForm>,
 ) -> Response {
-    if form.csrf != app.csrf {
+    start_revision(
+        app,
+        source_id,
+        &form.csrf,
+        &form.preset,
+        RevisionEdit::Lyrics(form.lyrics),
+    )
+}
+
+async fn undo(
+    State(app): State<App>,
+    WebPath(source_id): WebPath<String>,
+    Form(form): Form<UndoForm>,
+) -> Response {
+    start_revision(app, source_id, &form.csrf, &form.preset, RevisionEdit::Undo)
+}
+
+async fn timing(State(app): State<App>, WebPath(source_id): WebPath<String>) -> Response {
+    let lease = {
+        let jobs = app.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        if jobs
+            .get(&source_id)
+            .is_none_or(|job| job.record.status != "done")
+        {
+            return error_page(StatusCode::NOT_FOUND, "完成した結果が見つかりません。");
+        }
+        *app.revision_sources
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(source_id.clone())
+            .or_default() += 1;
+        SourceLease {
+            sources: app.revision_sources.clone(),
+            id: source_id.clone(),
+        }
+    };
+    let source = match app.directory(&source_id) {
+        Ok(dir) => dir,
+        Err(error) => return error_page(StatusCode::BAD_REQUEST, error),
+    };
+    let result =
+        tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            crate::revision::load_timing_draft(&source).map(|draft| serde_json::json!({
+            "duration": draft.duration(), "lines": draft.lines(), "can_undo": draft.can_undo()
+        }))
+        })
+        .await;
+    match result {
+        Ok(Ok(draft)) => axum::Json(draft).into_response(),
+        Ok(Err(error)) => error_page(StatusCode::BAD_REQUEST, error),
+        Err(error) => error_page(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+fn start_revision(
+    app: App,
+    source_id: String,
+    csrf: &str,
+    preset_text: &str,
+    edit: RevisionEdit,
+) -> Response {
+    if csrf != app.csrf {
         return error_page(StatusCode::FORBIDDEN, "アプリを開き直してください。");
     }
     let Some(source) = app
@@ -579,14 +657,14 @@ async fn revise(
     if source.record.status != "done" {
         return error_page(StatusCode::CONFLICT, "完成した曲の歌詞を直してください。");
     }
-    let preset = match <crate::presentation::VideoPreset as clap::ValueEnum>::from_str(
-        &form.preset,
-        false,
-    ) {
-        Ok(preset) => preset,
-        Err(_) => return error_page(StatusCode::BAD_REQUEST, "出力解像度を選んでください。"),
-    };
-    if let Err(error) = crate::lyrics::parse_lrc(&form.lyrics) {
+    let preset =
+        match <crate::presentation::VideoPreset as clap::ValueEnum>::from_str(preset_text, false) {
+            Ok(preset) => preset,
+            Err(_) => return error_page(StatusCode::BAD_REQUEST, "出力解像度を選んでください。"),
+        };
+    if let RevisionEdit::Lyrics(text) = &edit
+        && let Err(error) = crate::lyrics::parse_lrc(text)
+    {
         return error_page(StatusCode::BAD_REQUEST, error);
     }
     let Ok(permit) = app.busy.clone().try_acquire_owned() else {
@@ -609,10 +687,11 @@ async fn revise(
         {
             return error_page(StatusCode::NOT_FOUND, "修正元の結果が見つかりません。");
         }
-        app.revision_sources
+        *app.revision_sources
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(source_id.clone());
+            .entry(source_id.clone())
+            .or_default() += 1;
         SourceLease {
             sources: app.revision_sources.clone(),
             id: source_id,
@@ -649,8 +728,13 @@ async fn revise(
         .spawn(move || {
             let _permit = permit;
             let _lease = lease;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::revision::render_revision(&source_dir, &dir, &form.lyrics, preset, &progress)
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match edit {
+                RevisionEdit::Lyrics(text) => {
+                    crate::revision::render_revision(&source_dir, &dir, &text, preset, &progress)
+                }
+                RevisionEdit::Undo => {
+                    crate::revision::render_undo_revision(&source_dir, &dir, preset, &progress)
+                }
             }))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("字幕の作成に失敗しました。")));
             worker_app.finish(&worker_id, result);
@@ -700,7 +784,7 @@ async fn delete(
         .revision_sources
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .contains(&id)
+        .contains_key(&id)
     {
         return error_page(
             StatusCode::CONFLICT,
@@ -823,6 +907,176 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn persisted_timing_can_be_read_and_undone_after_app_restart() {
+        async fn request(app: &App, method: &str, uri: &str, form: String) -> Response {
+            router(app.clone())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("host", "127.0.0.1:19531")
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .body(Body::from(form))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+        async fn state(app: &App, id: &str) -> serde_json::Value {
+            let response = request(app, "GET", &format!("/jobs/{id}/timing"), String::new()).await;
+            let status = response.status();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+            serde_json::from_slice(&body).unwrap()
+        }
+        async fn finish(app: &App, response: Response) -> String {
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            let id = response.headers()[header::LOCATION]
+                .to_str()
+                .unwrap()
+                .strip_prefix("/jobs/")
+                .unwrap()
+                .to_string();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while app.jobs.lock().unwrap()[&id].record.status == "running" {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "字幕の再出力が完了しません"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            app.stop_workers().await;
+            let jobs = app.jobs.lock().unwrap();
+            let record = &jobs[&id].record;
+            assert_eq!(record.status, "done", "{:?}", record.error);
+            id
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let app = App::new(temp.path(), 19531).unwrap();
+        let source_id = Uuid::new_v4().to_string();
+        let source = app.directory(&source_id).unwrap();
+        fs::create_dir(&source).unwrap();
+        let samples: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+        for name in ["karaoke.wav", "vocals.wav"] {
+            media::write_stereo(&source.join(name), &samples, &samples).unwrap();
+        }
+        let options = Options {
+            lyrics: "[00:00.10]before\n[00:00.80]\n".into(),
+            ..Options::default()
+        };
+        fs::write(
+            source.join("settings.json"),
+            serde_json::to_vec(&options).unwrap(),
+        )
+        .unwrap();
+        app.jobs.lock().unwrap().insert(
+            source_id.clone(),
+            Job {
+                record: Record {
+                    id: source_id.clone(),
+                    title: "試験".into(),
+                    status: "done".into(),
+                    error: None,
+                },
+                progress: Progress::default(),
+            },
+        );
+        let initial = state(&app, &source_id).await;
+        assert_eq!(initial["lines"][0]["text"], "before");
+        assert_eq!(initial["can_undo"], false);
+        let mut form = reqwest::Url::parse("http://127.0.0.1/").unwrap();
+        form.query_pairs_mut()
+            .append_pair("csrf", &app.csrf)
+            .append_pair("lyrics", "[00:00.20]corrected\n[00:00.75]\n")
+            .append_pair("preset", "hd");
+        let response = request(
+            &app,
+            "POST",
+            &format!("/revise/{source_id}"),
+            form.query().unwrap().into(),
+        )
+        .await;
+        let edited_id = finish(&app, response).await;
+        let edited_dir = app.directory(&edited_id).unwrap();
+        let preserved: Vec<_> = [
+            "settings.json",
+            "timing-history.json",
+            "karaoke.wav",
+            "vocals.wav",
+        ]
+        .into_iter()
+        .map(|name| (name, fs::read(edited_dir.join(name)).unwrap()))
+        .collect();
+        drop(app);
+
+        let reopened = App::new(temp.path(), 19531).unwrap();
+        let edited = state(&reopened, &edited_id).await;
+        assert_eq!(edited["duration"], 1.0);
+        assert_eq!(edited["lines"][0]["start"], 0.2);
+        assert_eq!(edited["lines"][0]["end"], 0.75);
+        assert_eq!(edited["can_undo"], true);
+        let response = request(
+            &reopened,
+            "POST",
+            &format!("/undo/{edited_id}"),
+            "csrf=wrong&preset=hd".into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = request(
+            &reopened,
+            "POST",
+            &format!("/undo/{edited_id}"),
+            format!("csrf={}&preset=hd", reopened.csrf),
+        )
+        .await;
+        let undone_id = finish(&reopened, response).await;
+        let undone = state(&reopened, &undone_id).await;
+        assert_eq!(undone["lines"], initial["lines"]);
+        assert_eq!(
+            undone["can_undo"], false,
+            "undo must pop history, not append the undone edit again"
+        );
+        let undone_dir = reopened.directory(&undone_id).unwrap();
+        assert_eq!(
+            fs::read_to_string(undone_dir.join("lyrics.lrc")).unwrap(),
+            options.lyrics
+        );
+        assert!(
+            fs::read_to_string(undone_dir.join("lyrics.srt"))
+                .unwrap()
+                .contains("before")
+        );
+        assert!(
+            fs::read_to_string(undone_dir.join("lyrics.ass"))
+                .unwrap()
+                .contains("before")
+        );
+        for (name, bytes) in preserved {
+            assert_eq!(
+                fs::read(edited_dir.join(name)).unwrap(),
+                bytes,
+                "source changed: {name}"
+            );
+        }
+        assert!(!temp.path().join("models").exists());
+        fs::write(undone_dir.join("timing-history.json"), "{broken").unwrap();
+        let response = request(
+            &reopened,
+            "GET",
+            &format!("/jobs/{undone_id}/timing"),
+            String::new(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "corrupt history must not fall back to settings lyrics"
+        );
+    }
 
     #[tokio::test]
     async fn lyrics_can_be_revised_through_the_page_without_loading_a_model() {
@@ -993,7 +1247,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        app.revision_sources.lock().unwrap().insert(id.clone());
+        app.revision_sources.lock().unwrap().insert(id.clone(), 1);
         let lease = SourceLease {
             sources: app.revision_sources.clone(),
             id: id.clone(),
@@ -1013,7 +1267,30 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert!(app.directory(&id).unwrap().is_dir());
+        // A timing read can overlap a render. Releasing either reader must not
+        // unpin the source while the other operation still uses it.
+        *app.revision_sources.lock().unwrap().get_mut(&id).unwrap() += 1;
+        let remaining = SourceLease {
+            sources: app.revision_sources.clone(),
+            id: id.clone(),
+        };
         drop(lease);
+        let response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/delete/{id}"))
+                    .header("host", "127.0.0.1:19531")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("csrf={}", app.csrf)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(app.directory(&id).unwrap().is_dir());
+        drop(remaining);
         let response = service
             .oneshot(
                 Request::builder()
