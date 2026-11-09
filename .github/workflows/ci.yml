@@ -35,10 +35,9 @@ jobs:
           Copy-Item target/release/karaoke-maker.exe dist/KaraokeMaker/KaraokeMaker.exe
           Copy-Item target/release/karaoke-maker-cli.exe dist/KaraokeMaker/karaoke-maker-cli.exe
           Copy-Item LICENSE dist/KaraokeMaker/
-          Copy-Item docs/windows-package.md dist/KaraokeMaker/README.md
+          (Get-Content docs/windows-package.md -Raw).Replace('[依存先の条件](dependencies.md)', '[依存先の条件](docs/dependencies.md)') | Set-Content dist/KaraokeMaker/README.md
           Copy-Item docs dist/KaraokeMaker/docs -Recurse
-          (Get-Content dist/KaraokeMaker/docs/windows-package.md -Raw).Replace('[依存先の条件](docs/dependencies.md)', '[依存先の条件](dependencies.md)') | Set-Content dist/KaraokeMaker/docs/windows-package.md
-          Copy-Item docs/windows-package.md dist/KaraokeMaker/START-HERE.md
+          Copy-Item dist/KaraokeMaker/README.md dist/KaraokeMaker/START-HERE.md
           New-Item -ItemType Directory dist/KaraokeMaker/third-party/demucs-core | Out-Null
           Copy-Item vendor/demucs-core/LICENSE,vendor/demucs-core/UPSTREAM.md dist/KaraokeMaker/third-party/demucs-core/
           Copy-Item third-party/RUST-NOTICES.txt dist/KaraokeMaker/third-party/RUST-NOTICES.txt
