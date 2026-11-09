@@ -22,7 +22,46 @@ pub struct TimingDraft {
     undo: Vec<Vec<TimedLine>>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedTimingDraft {
+    version: u32,
+    duration: f64,
+    lines: Vec<TimedLine>,
+    undo: Vec<Vec<TimedLine>>,
+}
+
 impl TimingDraft {
+    /// Persist current lyrics and undo history without embedding media or paths.
+    pub fn to_json(&self) -> Result<String> {
+        let text = serde_json::to_string(&SavedTimingDraft {
+            version: 1,
+            duration: self.duration,
+            lines: self.lines.clone(),
+            undo: self.undo.clone(),
+        })?;
+        ensure!(text.len() <= 16 * 1024 * 1024, "編集履歴が大きすぎます。");
+        Ok(text)
+    }
+
+    pub fn from_json(text: &str, expected_duration: f64) -> Result<Self> {
+        ensure!(text.len() <= 16 * 1024 * 1024, "編集履歴が大きすぎます。");
+        let saved: SavedTimingDraft = serde_json::from_str(text)?;
+        ensure!(
+            saved.version == 1 && saved.duration == expected_duration,
+            "編集履歴の版か曲の長さが一致しません。"
+        );
+        ensure!(saved.undo.len() <= 100, "編集履歴は100段までです。");
+        timed_lines_lrc(&saved.lines, saved.duration)?;
+        for lines in &saved.undo {
+            timed_lines_lrc(lines, saved.duration)?;
+        }
+        Ok(Self {
+            lines: saved.lines,
+            duration: saved.duration,
+            undo: saved.undo,
+        })
+    }
     pub fn lines(&self) -> &[TimedLine] {
         &self.lines
     }
@@ -243,6 +282,125 @@ mod timing_tests {
         assert_eq!(cues[1].text, "");
         assert_eq!(cues[3].text, "last");
         assert_eq!(cues[4].text, "");
+    }
+    #[test]
+    fn saved_history_restores_undo_and_rejects_other_song_duration() {
+        let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        draft.replace(vec![line(2.0, 3.0, "changed")]).unwrap();
+        let json = draft.to_json().unwrap();
+        let mut reopened = TimingDraft::from_json(&json, 5.0).unwrap();
+        assert_eq!(reopened.lines(), draft.lines());
+        assert!(reopened.undo());
+        assert_eq!(reopened.lines()[0].text, "original");
+        assert!(TimingDraft::from_json(&json, 6.0).is_err());
+        let invalid = json.replace("changed", "[00:04.00]injected");
+        assert!(TimingDraft::from_json(&invalid, 5.0).is_err());
+    }
+    #[test]
+    fn history_preserves_tempo_adjusted_duration_exactly() {
+        for tempo in [0.5, 0.8, 1.0, 1.2, 1.5] {
+            for micros in (1_000_001..300_000_000).step_by(7919) {
+                let duration = micros as f64 / 1_000_000.0 / tempo;
+                let draft =
+                    TimingDraft::from_lrc("[00:00.00]line\n[00:00.50]\n", duration).unwrap();
+                let json = draft.to_json().unwrap();
+                let reopened = TimingDraft::from_json(&json, duration).unwrap();
+                assert_eq!(reopened.duration.to_bits(), duration.to_bits());
+                assert_eq!(reopened.lrc().unwrap(), draft.lrc().unwrap());
+            }
+        }
+    }
+    #[test]
+    fn restored_history_validates_every_undo_position() {
+        for count in [3, 100] {
+            let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+            for index in 0..count {
+                draft
+                    .replace(vec![line(1.0, 2.0, &format!("state-{index}"))])
+                    .unwrap();
+            }
+            let json = draft.to_json().unwrap();
+            assert!(TimingDraft::from_json(&json, 5.0).is_ok());
+            for index in 0..count {
+                let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+                value["undo"][index][0]["end"] = serde_json::json!(0.5);
+                assert!(
+                    TimingDraft::from_json(&value.to_string(), 5.0).is_err(),
+                    "undo {index} of {count}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn history_retains_exactly_one_hundred_edits_in_original_order() {
+        let mut draft = TimingDraft::from_lrc("[00:01.00]state-0\n[00:02.00]\n", 5.0).unwrap();
+        for index in 1..=150 {
+            draft
+                .replace(vec![line(1.0, 2.0, &format!("state-{index}"))])
+                .unwrap();
+        }
+        let json = draft.to_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["undo"].as_array().unwrap().len(), 100);
+        let mut restored = TimingDraft::from_json(&json, 5.0).unwrap();
+        for index in (50..150).rev() {
+            assert!(restored.undo());
+            assert_eq!(restored.lines()[0].text, format!("state-{index}"));
+        }
+        assert!(!restored.undo());
+        let mut unknown = value;
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(TimingDraft::from_json(&unknown.to_string(), 5.0).is_err());
+    }
+    #[test]
+    fn history_size_limit_accepts_exact_boundary_and_rejects_one_more_byte() {
+        const LIMIT: usize = 16 * 1024 * 1024;
+        let draft = TimingDraft::from_lrc("[00:01.00]line\n[00:02.00]\n", 5.0).unwrap();
+        let mut input = draft.to_json().unwrap();
+        input.extend(std::iter::repeat_n(' ', LIMIT - input.len()));
+        assert!(TimingDraft::from_json(&input, 5.0).is_ok());
+        input.push(' ');
+        assert!(TimingDraft::from_json(&input, 5.0).is_err());
+
+        // JSON escapes expand one valid LRC byte into six persisted bytes.
+        // Build a valid bounded history, then fill its JSON to the exact limit.
+        let mut large = draft;
+        let state = vec![line(1.0, 2.0, &"\u{0001}".repeat(60_000))];
+        large.lines = state.clone();
+        large.undo = vec![state; 45];
+        let size = large.to_json().unwrap().len();
+        assert!(size < LIMIT);
+        let remaining = LIMIT - size;
+        let mut remaining = remaining;
+        for lines in std::iter::once(&mut large.lines).chain(large.undo.iter_mut()) {
+            let count = remaining.min(5_000);
+            lines[0].text.push_str(&"x".repeat(count));
+            remaining -= count;
+        }
+        assert_eq!(remaining, 0);
+        let json = large.to_json().unwrap();
+        assert_eq!(json.len(), LIMIT);
+        assert!(TimingDraft::from_json(&json, 5.0).is_ok());
+        large.lines[0].text.push('x');
+        assert!(large.to_json().is_err());
+    }
+    #[test]
+    fn corrupt_unsupported_or_excessive_history_cannot_be_restored() {
+        let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        draft.replace(vec![line(2.0, 3.0, "changed")]).unwrap();
+        let json = draft.to_json().unwrap();
+        assert!(TimingDraft::from_json("{", 5.0).is_err());
+        assert!(
+            TimingDraft::from_json(&json.replace("\"version\":1", "\"version\":2"), 5.0).is_err()
+        );
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["undo"] = serde_json::json!(vec![vec![line(1.0, 2.0, "old")]; 101]);
+        assert!(TimingDraft::from_json(&value.to_string(), 5.0).is_err());
+        value["undo"] = serde_json::json!([vec![line(4.0, 3.0, "invalid")]]);
+        assert!(TimingDraft::from_json(&value.to_string(), 5.0).is_err());
+        assert_eq!(draft.lines()[0].text, "changed");
+        assert!(draft.undo());
+        assert_eq!(draft.lines()[0].text, "original");
     }
     #[test]
     fn accepted_edits_remain_readable_at_rounded_song_end() {
