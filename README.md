@@ -28,6 +28,8 @@
 
 FFmpegとffprobeが必要です。所有者のPCでは、すでに導入されたFFmpeg 8.0.1を使います。別のPCでは `winget install --id Gyan.FFmpeg -e` で導入してから開いてください。標準の高音質分離はNVIDIA GPU、更新されたドライバーとCUDA実行部品が必要です。このPCのRTX 5090で確認済みです。比較用DemucsはVulkanを使います。
 
+Windows x64では、最新の[Microsoft Visual C++ v14 再頒布可能パッケージ（x64）](https://aka.ms/vc14/vc_redist.x64.exe)も先に導入してください。これは実行用の部品で、Visual StudioやCUDA Toolkit全体は不要です。高音質分離の実行部品は[初回準備](docs/runtime-setup.md)でアプリの保存先へ自動導入します。
+
 カラオケ変換に使う音楽・動画・歌詞・生成物はこのPCで扱います。初回だけ、公開された標準分離モデル（約474MB）をHugging Faceから取得し、SHA-256を照合します。以後は取得したモデルを使います。有料APIやAPIキーは使いません。
 
 ## Sunoで音楽を作る

@@ -1,5 +1,7 @@
 # Windowsの配布物
 
+Windows x64で使います。初回は[Microsoft公式のVisual C++ v14 再頒布可能パッケージ（x64）](https://aka.ms/vc14/vc_redist.x64.exe)を導入してください。アプリ本体とONNX Runtimeに必要な実行用部品で、Visual Studioの導入は不要です。
+
 ZIPを展開し、`KaraokeMaker.exe` を開きます。CLIは `karaoke-maker-cli.exe` です。
 作成した曲・設定・取得モデルは実行ファイルの隣の `data` に保存します。
 更新前にアプリを終了し、既存の `data` と原本を保持してください。

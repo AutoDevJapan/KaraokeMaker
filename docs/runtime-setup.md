@@ -1,6 +1,6 @@
 # 高音質分離の初回準備
 
-高音質分離には対応するNVIDIA GPUとドライバー、FFmpeg/ffprobeが必要です。CUDA Toolkit全体の導入や環境変数の手動設定は必要ありません。
+高音質分離にはWindows x64、対応するNVIDIA GPUとドライバー、FFmpeg/ffprobe、最新の[Microsoft Visual C++ v14 再頒布可能パッケージ（x64）](https://aka.ms/vc14/vc_redist.x64.exe)が必要です。[ONNX Runtimeの導入条件](https://onnxruntime.ai/docs/install/#requirements)にも対応する実行用部品です。Visual StudioやCUDA Toolkit全体の導入、環境変数の手動設定は必要ありません。
 
 通常はZIPを展開し、`KaraokeMaker.exe` で音源と解像度を選んで作成します。固定版のモデルを取得し、実行部品がなければMicrosoft/NVIDIAの公式配布元から固定版を取得します。音声や歌詞を送信する処理ではありません。モデル・部品のサイズとSHA-256が一致してから使用します。
 
