@@ -22,7 +22,44 @@ pub struct TimingDraft {
     undo: Vec<Vec<TimedLine>>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedTimingDraft {
+    version: u32,
+    duration: f64,
+    lines: Vec<TimedLine>,
+    undo: Vec<Vec<TimedLine>>,
+}
+
 impl TimingDraft {
+    /// Persist current lyrics and undo history without embedding media or paths.
+    pub fn to_json(&self) -> Result<String> {
+        Ok(serde_json::to_string(&SavedTimingDraft {
+            version: 1,
+            duration: self.duration,
+            lines: self.lines.clone(),
+            undo: self.undo.clone(),
+        })?)
+    }
+
+    pub fn from_json(text: &str, expected_duration: f64) -> Result<Self> {
+        ensure!(text.len() <= 16 * 1024 * 1024, "編集履歴が大きすぎます。");
+        let saved: SavedTimingDraft = serde_json::from_str(text)?;
+        ensure!(
+            saved.version == 1 && saved.duration == expected_duration,
+            "編集履歴の版か曲の長さが一致しません。"
+        );
+        ensure!(saved.undo.len() <= 100, "編集履歴は100段までです。");
+        timed_lines_lrc(&saved.lines, saved.duration)?;
+        for lines in &saved.undo {
+            timed_lines_lrc(lines, saved.duration)?;
+        }
+        Ok(Self {
+            lines: saved.lines,
+            duration: saved.duration,
+            undo: saved.undo,
+        })
+    }
     pub fn lines(&self) -> &[TimedLine] {
         &self.lines
     }
@@ -243,6 +280,19 @@ mod timing_tests {
         assert_eq!(cues[1].text, "");
         assert_eq!(cues[3].text, "last");
         assert_eq!(cues[4].text, "");
+    }
+    #[test]
+    fn saved_history_restores_undo_and_rejects_other_song_duration() {
+        let mut draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        draft.replace(vec![line(2.0, 3.0, "changed")]).unwrap();
+        let json = draft.to_json().unwrap();
+        let mut reopened = TimingDraft::from_json(&json, 5.0).unwrap();
+        assert_eq!(reopened.lines(), draft.lines());
+        assert!(reopened.undo());
+        assert_eq!(reopened.lines()[0].text, "original");
+        assert!(TimingDraft::from_json(&json, 6.0).is_err());
+        let invalid = json.replace("changed", "[00:04.00]injected");
+        assert!(TimingDraft::from_json(&invalid, 5.0).is_err());
     }
     #[test]
     fn accepted_edits_remain_readable_at_rounded_song_end() {
