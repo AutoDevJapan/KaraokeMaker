@@ -396,6 +396,10 @@ fn subtitle_revision_preserves_adjusted_audio_and_original_files() {
         &Progress::default(),
     )
     .unwrap();
+    let mut history = revision::load_history(&revised, 3.2).unwrap().unwrap();
+    assert_eq!(history.lines()[0].text, "corrected");
+    assert!(history.undo());
+    assert_eq!(history.lines()[0].text, "before");
     assert_eq!(
         fs::read(previous.join("karaoke.wav")).unwrap(),
         before_audio
