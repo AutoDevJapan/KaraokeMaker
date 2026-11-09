@@ -41,26 +41,7 @@ jobs:
           Copy-Item docs/windows-package.md dist/KaraokeMaker/START-HERE.md
           New-Item -ItemType Directory dist/KaraokeMaker/third-party/demucs-core | Out-Null
           Copy-Item vendor/demucs-core/LICENSE,vendor/demucs-core/UPSTREAM.md dist/KaraokeMaker/third-party/demucs-core/
-          $metadataText = cargo metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { throw 'Dependency metadata failed' }
-          $metadata = $metadataText | ConvertFrom-Json
-          $noticeRoot = 'dist/KaraokeMaker/third-party/rust'
-          New-Item -ItemType Directory $noticeRoot | Out-Null
-          foreach ($package in $metadata.packages) {
-            if ($package.id -eq $metadata.resolve.root) { continue }
-            $source = Split-Path $package.manifest_path
-            $notices = @(Get-ChildItem -LiteralPath $source -File | Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE|COPYRIGHT)' })
-            if ($package.license_file) {
-              $declared = Join-Path $source $package.license_file
-              if (!(Test-Path -LiteralPath $declared -PathType Leaf)) { throw "Missing declared license: $($package.name)" }
-              $notices += Get-Item -LiteralPath $declared
-            }
-            if ($notices.Count -eq 0) { throw "Missing dependency notices: $($package.name) $($package.version)" }
-            $destination = Join-Path $noticeRoot "$($package.name)-$($package.version)"
-            New-Item -ItemType Directory $destination | Out-Null
-            $notices | Sort-Object FullName -Unique | Copy-Item -Destination $destination
-            "$($package.name) $($package.version)`nLicense: $($package.license)`nRepository: $($package.repository)" | Set-Content (Join-Path $destination 'PACKAGE.txt')
-          }
+          Copy-Item third-party/RUST-NOTICES.txt dist/KaraokeMaker/third-party/RUST-NOTICES.txt
           foreach ($doc in Get-ChildItem dist/KaraokeMaker -Filter '*.md' -Recurse) {
             foreach ($match in [regex]::Matches((Get-Content $doc.FullName -Raw), '\]\(([^)]+)\)')) {
               $link = $match.Groups[1].Value
