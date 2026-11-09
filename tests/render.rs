@@ -518,26 +518,46 @@ fn subtitle_revision_chain_inherits_history_and_never_writes_to_its_source() {
         seen.push(history.lines()[0].text.clone());
     }
     assert_eq!(seen, ["three", "two", "one"]);
-    // A corrupt history in the source is rejected without creating anything in the new folder.
-    let broken = temp.path().join("broken");
-    fs::create_dir(&broken).unwrap();
-    for name in ["settings.json", "karaoke.wav", "vocals.wav"] {
-        fs::copy(fourth.join(name), broken.join(name)).unwrap();
+    // A corrupt, other-song or oversized history in the source is rejected without creating
+    // anything in the new folder, and the source history is left as it was.
+    let other_song = revision::TimingDraft::from_lrc("[00:01.00]x\n[00:02.00]\n", 9.0)
+        .unwrap()
+        .to_json()
+        .unwrap()
+        .into_bytes();
+    let mut oversized = other_song.clone();
+    oversized.resize(16 * 1024 * 1024 + 1, b' ');
+    for (name, bad) in [
+        ("corrupt", b"{broken".to_vec()),
+        ("other-song", other_song),
+        ("oversized", oversized),
+    ] {
+        let broken = temp.path().join(format!("broken-{name}"));
+        fs::create_dir(&broken).unwrap();
+        for file in ["settings.json", "karaoke.wav", "vocals.wav"] {
+            fs::copy(fourth.join(file), broken.join(file)).unwrap();
+        }
+        fs::write(broken.join("timing-history.json"), &bad).unwrap();
+        let rejected = temp.path().join(format!("rejected-{name}"));
+        fs::create_dir(&rejected).unwrap();
+        assert!(
+            revision::render_revision(
+                &broken,
+                &rejected,
+                "[00:00.40]x\n[00:01.60]\n",
+                VideoPreset::Hd,
+                &Progress::default()
+            )
+            .is_err(),
+            "{name}"
+        );
+        assert_eq!(fs::read_dir(&rejected).unwrap().count(), 0, "{name}");
+        assert_eq!(
+            fs::read(broken.join("timing-history.json")).unwrap(),
+            bad,
+            "{name}"
+        );
     }
-    fs::write(broken.join("timing-history.json"), b"{broken").unwrap();
-    let rejected = temp.path().join("rejected");
-    fs::create_dir(&rejected).unwrap();
-    assert!(
-        revision::render_revision(
-            &broken,
-            &rejected,
-            "[00:00.40]x\n[00:01.60]\n",
-            VideoPreset::Hd,
-            &Progress::default()
-        )
-        .is_err()
-    );
-    assert_eq!(fs::read_dir(&rejected).unwrap().count(), 0);
     for dir in [&second, &third, &fourth] {
         assert!(fs::read_dir(dir).unwrap().all(|entry| {
             !entry
@@ -547,10 +567,6 @@ fn subtitle_revision_chain_inherits_history_and_never_writes_to_its_source() {
                 .ends_with(".tmp")
         }));
     }
-    assert_eq!(
-        fs::read(broken.join("timing-history.json")).unwrap(),
-        b"{broken"
-    );
 }
 
 #[test]
