@@ -223,6 +223,8 @@ pub fn render_revision(
         lyrics: text.into(),
         preset,
         style: previous.style,
+        template: previous.template,
+        project: previous.project,
         sample_rate: previous.sample_rate,
         original_video: false,
         ..Options::default()

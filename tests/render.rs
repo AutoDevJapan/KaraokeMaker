@@ -281,6 +281,101 @@ fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientat
 }
 
 #[test]
+fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() {
+    use karaoke_maker::{presentation::VideoPreset, revision, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.wav");
+    let signal: Vec<f32> = (0..44100 * 4)
+        .map(|i| (i as f32 * std::f32::consts::TAU * 261.6256 / 44100.0).sin() * 0.2)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    let tools = Tools::discover();
+    let make_previous = |name: &str, options: &Options| {
+        let dir = temp.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        media::write_stereo(&dir.join("instrumental-raw.wav"), &signal, &signal).unwrap();
+        media::write_stereo(&dir.join("vocals.wav"), &signal, &signal).unwrap();
+        media::export(
+            &tools,
+            &source,
+            &dir,
+            &media::probe(&tools, &source).unwrap(),
+            options,
+            4.0,
+            &Progress::default(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            serde_json::to_vec(options).unwrap(),
+        )
+        .unwrap();
+        dir
+    };
+    let lyrics = "[00:00.50]before\n[00:02.00]next".to_string();
+    let templated = Options {
+        sample_rate: 44100,
+        lyrics: lyrics.clone(),
+        template: Some(Template {
+            version: 1,
+            project: "客先A".into(),
+            style: Default::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: 0.2,
+            vertical_margin: 0.2,
+            max_lines: 2,
+        }),
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    let previous = make_previous("previous", &templated);
+    let revised = temp.path().join("revised");
+    fs::create_dir(&revised).unwrap();
+    revision::render_revision(
+        &previous,
+        &revised,
+        "[00:00.50]after\n[00:02.00]\n",
+        VideoPreset::FullHd,
+        &Progress::default(),
+    )
+    .unwrap();
+    let ass = fs::read_to_string(revised.join("lyrics.ass")).unwrap();
+    assert!(ass.contains(",384,384,"), "template margins kept: {ass}");
+    let saved: Options =
+        serde_json::from_slice(&fs::read(revised.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(saved.project.as_deref(), Some("客先A"));
+    assert_eq!(saved.template.unwrap().max_lines, 2);
+    // A result saved before templates existed has neither field and still revises.
+    let mut old: serde_json::Value = serde_json::to_value(Options {
+        sample_rate: 44100,
+        lyrics,
+        ..Options::default()
+    })
+    .unwrap();
+    old.as_object_mut().unwrap().remove("template");
+    old.as_object_mut().unwrap().remove("project");
+    let legacy = make_previous("legacy", &serde_json::from_value(old.clone()).unwrap());
+    fs::write(
+        legacy.join("settings.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    let revised_legacy = temp.path().join("revised-legacy");
+    fs::create_dir(&revised_legacy).unwrap();
+    revision::render_revision(
+        &legacy,
+        &revised_legacy,
+        "[00:00.50]after\n[00:02.00]\n",
+        VideoPreset::FullHd,
+        &Progress::default(),
+    )
+    .unwrap();
+    let ass = fs::read_to_string(revised_legacy.join("lyrics.ass")).unwrap();
+    assert!(!ass.contains(",384,384,"));
+}
+
+#[test]
 fn loud_audio_keeps_headroom_after_wav_mp3_and_aac_export() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.wav");
