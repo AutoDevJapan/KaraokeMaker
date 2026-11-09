@@ -496,6 +496,13 @@ pub(crate) fn layout_margins(
         right = right.max(side);
         top = top.max(edge);
         bottom = bottom.max(edge);
+        if let Some(p) = &template.placement {
+            left = left.max((p.subtitles.x * width as f64).ceil() as u32);
+            right =
+                right.max(((1.0 - p.subtitles.x - p.subtitles.width) * width as f64).ceil() as u32);
+            bottom = bottom
+                .max(((1.0 - p.subtitles.y - p.subtitles.height) * height as f64).ceil() as u32);
+        }
     }
     (left, right, bottom, top)
 }
@@ -515,6 +522,21 @@ fn ass_with_layout(
     let scale = width as f64 / 1280.0;
     let scaled = |value: f64| (value * scale).round() as u32;
     let (left, right, bottom, top) = layout_margins(preset, template);
+    if let Some(t) = template.filter(|t| t.placement.is_some()) {
+        let mut base = t.clone();
+        base.placement = None;
+        let (l, r, b, u) = layout_margins(preset, Some(&base));
+        let p = t.placement.as_ref().unwrap();
+        for rect in [&p.title, &p.subtitles] {
+            ensure!(
+                rect.x * width as f64 >= l as f64
+                    && (rect.x + rect.width) * width as f64 <= (width - r) as f64 + 0.01
+                    && rect.y * height as f64 >= u as f64
+                    && (rect.y + rect.height) * height as f64 <= (height - b) as f64 + 0.01,
+                "指定位置が安全領域の外です。位置は自動変更しません。"
+            );
+        }
+    }
     let font = &style.font;
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
@@ -531,7 +553,23 @@ fn ass_with_layout(
     } else {
         0
     };
-    let (title_left, title_right) = (left + logo_reserve, right + logo_reserve);
+    let (mut title_left, mut title_right) = (left + logo_reserve, right + logo_reserve);
+    let mut title_top = top;
+    if let Some(p) = template.and_then(|t| t.placement.as_ref()) {
+        title_left = title_left.max((p.title.x * width as f64).ceil() as u32);
+        title_right =
+            title_right.max(((1.0 - p.title.x - p.title.width) * width as f64).ceil() as u32);
+        title_top = top.max((p.title.y * height as f64).ceil() as u32);
+        ensure!(
+            p.subtitles.height * height as f64
+                >= lyric_size as f64 * 1.5 * template.unwrap().max_lines as f64,
+            "字幕配置の高さが行数に対して足りません。"
+        );
+        ensure!(
+            p.title.height * height as f64 >= title_size as f64 * 1.5,
+            "タイトル配置の高さが足りません。"
+        );
+    }
     let title_available = width.saturating_sub(title_left + title_right) as f64;
     let wrapped = |text: &str, size: u32, available: f64| -> Vec<String> {
         if fixed_wrap {
@@ -554,7 +592,7 @@ fn ass_with_layout(
     let shadow = scaled(1.0);
     // libass rasterizes the vector glyphs after scaling the video to the target size.
     let mut ass = format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: {wrap_style}\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{title_left},{title_right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: {wrap_style}\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{title_left},{title_right},{title_top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     );
     ass.push_str(&format!(
         "Dialogue: 0,0:00:00.00,{},Title,,0,0,0,,{}\n",
@@ -627,6 +665,7 @@ mod tests {
             horizontal_margin: horizontal,
             vertical_margin: vertical,
             max_lines,
+            placement: None,
         }
     }
     fn lyric_margins(ass: &str) -> Vec<u32> {
