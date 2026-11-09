@@ -35,6 +35,15 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// Pixel edges inside the requested box. Rendering and validation share this rounding.
+    pub(crate) fn pixel_bounds(&self, width: u32, height: u32) -> (u32, u32, u32, u32) {
+        (
+            (self.x * width as f64).ceil() as u32,
+            (self.y * height as f64).ceil() as u32,
+            ((self.x + self.width) * width as f64).floor() as u32,
+            ((self.y + self.height) * height as f64).floor() as u32,
+        )
+    }
     fn valid(&self) -> bool {
         [self.x, self.y, self.width, self.height]
             .iter()

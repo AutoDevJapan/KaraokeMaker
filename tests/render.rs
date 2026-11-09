@@ -1408,3 +1408,71 @@ fn measured_multiline_word_highlights_later_lines_during_its_original_interval()
         );
     }
 }
+
+#[test]
+fn manual_avoid_area_rejects_a_logo_before_video_output() {
+    use karaoke_maker::{
+        presentation::VideoPreset,
+        template::{Placement, Rect, Template},
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let samples: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.05).sin() * 0.1).collect();
+    media::write_stereo(&source, &samples, &samples).unwrap();
+    let original = fs::read(&source).unwrap();
+    let logo = temp.path().join("logo.png");
+    solid_png(&logo, "200x200", "red");
+    let mut t = Template {
+        version: 1,
+        project: "test".into(),
+        style: Default::default(),
+        background_image: None,
+        logo: Some(logo),
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: 1,
+        placement: Some(Placement {
+            title: Rect {
+                x: 0.2,
+                y: 0.3,
+                width: 0.4,
+                height: 0.1,
+            },
+            subtitles: Rect {
+                x: 0.2,
+                y: 0.6,
+                width: 0.6,
+                height: 0.2,
+            },
+            avoid: vec![Rect {
+                x: 0.6,
+                y: 0.1,
+                width: 0.3,
+                height: 0.15,
+            }],
+        }),
+    };
+    let output = temp.path().join("refused");
+    fs::create_dir(&output).unwrap();
+    let mut options = Options {
+        title: "曲".into(),
+        lyrics: "[00:00.10]歌\n[00:00.90]\n".into(),
+        preset: VideoPreset::Vertical,
+        template: Some(t.clone()),
+        project: Some("test".into()),
+        ..Default::default()
+    };
+    let error = media::render(&source, &output, &options, &Progress::default()).unwrap_err();
+    assert!(error.to_string().contains("ロゴ枠が回避領域"), "{error:#}");
+    assert!(!output.join("karaoke.mp4").exists());
+    assert_eq!(fs::read(&source).unwrap(), original);
+    // The same logo remains at the same location when the manually specified avoid area is elsewhere.
+    t.placement.as_mut().unwrap().avoid = vec![Rect {
+        x: 0.2,
+        y: 0.45,
+        width: 0.2,
+        height: 0.1,
+    }];
+    options.template = Some(t);
+    assert!(media::check_lyrics_layout(&options, 1.0).is_ok());
+}
