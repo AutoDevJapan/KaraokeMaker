@@ -549,14 +549,12 @@ pub fn export(
         ]);
     } else if let Some(image) = template_image {
         args.extend([
-            "-loop".into(),
-            "1".into(),
-            "-framerate".into(),
-            "30".into(),
             "-protocol_whitelist".into(),
             "file".into(),
             "-f".into(),
             "image2".into(),
+            "-pattern_type".into(),
+            "none".into(),
             "-i".into(),
             image.display().to_string(),
         ]);
@@ -574,25 +572,38 @@ pub fn export(
         "0:v:0".into()
     };
     args.extend(["-i".into(), "karaoke.wav".into()]);
+    // A still background is decoded once and repeated, so a broken or huge picture fails or
+    // finishes at once instead of being read again for every frame.
+    let (still_in, still_out) = if template_image.is_some() {
+        ("loop=loop=-1:size=1:start=0,", ",fps=30")
+    } else {
+        ("", "")
+    };
     let base = format!(
-        "setpts=PTS/{},scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{background},setsar=1,tpad=stop_mode=clone:stop_duration=1800",
+        "{still_in}setpts=PTS/{},scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{background},setsar=1,tpad=stop_mode=clone:stop_duration=1800{still_out}",
         options.tempo
     );
     if let Some(logo) = logo {
-        // The logo sits in the top-right corner inside the safe margin; subtitles are drawn last.
-        let margin = (height as f64 * 0.04).round() as u32;
-        let logo_height = (height as f64 * 0.1).round() as u32;
+        // The logo sits in the top-right corner of the safe area (saved margins included),
+        // limited to a quarter of its width and a tenth of the height; subtitles are drawn last.
+        let (left, right, _, top) =
+            lyrics::layout_margins(options.preset, options.template.as_ref());
+        let max_width = ((width - left - right) as f64 * 0.25).round() as u32;
+        let max_height = (height as f64 * 0.1).round() as u32;
+        let edge = width - right;
         args.extend([
             "-protocol_whitelist".into(),
             "file".into(),
             "-f".into(),
             "image2".into(),
+            "-pattern_type".into(),
+            "none".into(),
             "-i".into(),
             logo.display().to_string(),
         ]);
         args.extend([
             "-filter_complex".into(),
-            format!("[{video_map}]{base}[bg];[2:v]scale=-2:{logo_height},format=rgba[logo];[bg][logo]overlay=W-w-{margin}:{margin},ass=lyrics.ass[v]"),
+            format!("[{video_map}]{base}[bg];[2:v]scale=w={max_width}:h={max_height}:force_original_aspect_ratio=decrease,format=rgba[logo];[bg][logo]overlay={edge}-w:{top},ass=lyrics.ass[v]"),
             "-map".into(), "[v]".into(),
         ]);
     } else {
@@ -658,6 +669,26 @@ pub fn export(
 
 /// Render supplied audio (original mix or approved instrumental) without AI separation.
 /// Inputs remain untouched; the CLI allocates a fresh output directory per revision.
+/// Check timestamps and, with a template, the line limit before any slow processing starts.
+pub fn check_lyrics_layout(options: &Options, duration: f64) -> Result<()> {
+    let cues = lyrics::parse_lrc(&options.lyrics)?;
+    match &options.template {
+        Some(template) => {
+            lyrics::make_ass_templated(
+                &options.title,
+                &cues,
+                duration,
+                options.tempo,
+                options.preset,
+                template,
+            )?;
+        }
+        None => {
+            lyrics::make_ass(&options.title, &cues, duration, options.tempo)?;
+        }
+    }
+    Ok(())
+}
 pub fn render(input: &Path, dir: &Path, options: &Options, progress: &Progress) -> Result<()> {
     render_bounded(input, dir, options, progress, MAX_DURATION)
 }
@@ -775,12 +806,7 @@ pub fn convert(
     let duration = left.len() as f64 / 44100.0;
     // Validate timestamps before spending time on inference.
     if options.lyrics.trim().starts_with('[') || options.lyrics.trim().is_empty() {
-        lyrics::make_ass(
-            &options.title,
-            &lyrics::parse_lrc(&options.lyrics)?,
-            duration,
-            options.tempo,
-        )?;
+        check_lyrics_layout(options, duration)?;
     }
     progress.set("歌声と伴奏を分離しています。初回はモデルを取得します。");
     let stems = crate::model::separate_using(&left, &right, cache, options.separation, progress)?;

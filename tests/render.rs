@@ -254,13 +254,16 @@ fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientat
             pixel(width / 10, height / 2)[2] > pixel(width / 10, height / 2)[0] + 40,
             "{width}: background image"
         );
-        let logo_pixel = pixel(
-            width - (height as f64 * 0.04) as usize - 8,
-            (height as f64 * 0.04) as usize + 8,
-        );
+        // The logo's top-right corner sits on the corner of the safe area (margins included).
+        let logo_pixel = pixel(width - right - 8, top + 8);
         assert!(
             logo_pixel[0] > 150 && logo_pixel[1] < 80,
             "{width}: logo {logo_pixel:?}"
+        );
+        let outside_logo = pixel(width - right + 8, top + 8);
+        assert!(
+            outside_logo[0] < 100,
+            "{width}: logo reaches past the right safe edge {outside_logo:?}"
         );
     }
     // One line is not enough for this lyric, and another project's template is refused.
@@ -278,6 +281,126 @@ fn template_render_keeps_long_japanese_subtitles_inside_margins_in_both_orientat
     let mut other = options(VideoPreset::FullHd, template(2));
     other.project = Some("別の客先".into());
     assert!(media::render(&source, &refused, &other, &Progress::default()).is_err());
+}
+
+#[test]
+fn truncated_template_background_fails_quickly_instead_of_looping_forever() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    // A PNG cut off after the header passes the signature check but cannot be decoded.
+    let full = temp.path().join("full.png");
+    solid_png(&full, "800x450", "0x203060");
+    let cut = temp.path().join("cut.png");
+    fs::write(&cut, &fs::read(&full).unwrap()[..60]).unwrap();
+    let output = temp.path().join("out");
+    fs::create_dir(&output).unwrap();
+    let options = Options {
+        lyrics: "[00:00.20]あ\n[00:01.00]\n".into(),
+        template: Some(Template {
+            version: 1,
+            project: "客先A".into(),
+            style: Default::default(),
+            background_image: Some(cut),
+            logo: None,
+            horizontal_margin: 0.1,
+            vertical_margin: 0.1,
+            max_lines: 2,
+        }),
+        project: Some("客先A".into()),
+        preset: VideoPreset::Hd,
+        ..Options::default()
+    };
+    let progress = Progress::default();
+    // Stop a run that never ends so that the test itself cannot hang.
+    let cancel = progress.cancelled.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(25));
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let started = std::time::Instant::now();
+    assert!(media::render(&source, &output, &options, &progress).is_err());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "a broken background must be refused quickly, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn convert_checks_the_template_line_limit_before_slow_work() {
+    use karaoke_maker::template::Template;
+    let template = |lines: u8| Template {
+        version: 1,
+        project: "客先A".into(),
+        style: Default::default(),
+        background_image: None,
+        logo: None,
+        horizontal_margin: 0.1,
+        vertical_margin: 0.1,
+        max_lines: lines,
+    };
+    let long = "あ".repeat(60);
+    let options = |template: Option<Template>| Options {
+        lyrics: format!(
+            "[00:01.00]{long}
+[00:02.00]
+"
+        ),
+        template,
+        project: Some("客先A".into()),
+        ..Options::default()
+    };
+    assert!(media::check_lyrics_layout(&options(Some(template(1))), 3.0).is_err());
+    assert!(media::check_lyrics_layout(&options(Some(template(4))), 3.0).is_ok());
+    assert!(media::check_lyrics_layout(&options(None), 3.0).is_ok());
+}
+#[test]
+fn still_background_keeps_the_output_length_at_other_tempos() {
+    use karaoke_maker::{presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.wav");
+    let signal: Vec<f32> = (0..44100 * 2)
+        .map(|i| (i as f32 * 0.05).sin() * 0.1)
+        .collect();
+    media::write_stereo(&source, &signal, &signal).unwrap();
+    // A name with a percent sign is read as a plain file, not as a numbered image sequence.
+    let plain = temp.path().join("plain.png");
+    solid_png(&plain, "800x450", "0x203060");
+    let background = temp.path().join("100%d.png");
+    fs::rename(&plain, &background).unwrap();
+    for tempo in [0.8, 1.25] {
+        let output = temp.path().join(format!("out-{tempo}"));
+        fs::create_dir(&output).unwrap();
+        let options = Options {
+            tempo,
+            lyrics: "[00:00.20]あ\n[00:01.00]\n".into(),
+            template: Some(Template {
+                version: 1,
+                project: "客先A".into(),
+                style: Default::default(),
+                background_image: Some(background.clone()),
+                logo: None,
+                horizontal_margin: 0.1,
+                vertical_margin: 0.1,
+                max_lines: 2,
+            }),
+            project: Some("客先A".into()),
+            preset: VideoPreset::Hd,
+            ..Options::default()
+        };
+        media::render(&source, &output, &options, &Progress::default()).unwrap();
+        let video = media::probe(&Tools::discover(), &output.join("karaoke.mp4")).unwrap();
+        assert!(
+            (video.duration - 2.0 / tempo).abs() < 0.25,
+            "{tempo}: {}",
+            video.duration
+        );
+    }
 }
 
 #[test]

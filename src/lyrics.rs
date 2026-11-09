@@ -258,26 +258,122 @@ pub fn to_lrc(cues: &[Cue]) -> String {
         .collect()
 }
 
-/// Break text into lines whose estimated width (full-width glyph = 1, ASCII = 0.6) fits the budget.
-fn wrap_to_width(text: &str, budget: f64) -> Vec<String> {
-    let mut lines = Vec::new();
-    for line in text.split('\n') {
-        let mut current = String::new();
-        let mut used = 0.0;
-        for ch in line.chars() {
-            let width = if ch.is_ascii() { 0.6 } else { 1.0 };
-            if used + width > budget && !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-                used = 0.0;
-            }
-            current.push(ch);
-            used += width;
+/// A glyph cluster that must not be split: a base character with its combining marks,
+/// a ZWJ sequence, or a pair of regional indicators. Closing punctuation joins the cluster
+/// before it so that a line never starts with it.
+fn glyph_clusters(line: &str) -> Vec<(String, f64)> {
+    let mut clusters: Vec<(String, f64)> = Vec::new();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        let closing = "。、，．,.）)」』】〕〉》！？!?:;；：…‥";
+        if closing.contains(c) && !clusters.is_empty() {
+            let last = clusters.last_mut().unwrap();
+            last.0.push(c);
+            last.1 += if c.is_ascii() { 0.6 } else { 1.0 };
+            continue;
         }
-        lines.push(current);
+        let mut text = c.to_string();
+        let regional = ('\u{1F1E6}'..='\u{1F1FF}').contains(&c);
+        if regional
+            && chars
+                .peek()
+                .is_some_and(|n| ('\u{1F1E6}'..='\u{1F1FF}').contains(n))
+        {
+            text.push(chars.next().unwrap());
+        }
+        while let Some(&next) = chars.peek() {
+            let mark = matches!(next, '\u{0300}'..='\u{036F}' | '\u{3099}' | '\u{309A}' | '\u{FE00}'..='\u{FE0F}' | '\u{200D}');
+            if !mark {
+                break;
+            }
+            text.push(next);
+            chars.next();
+            if next == '\u{200D}'
+                && let Some(joined) = chars.next()
+            {
+                text.push(joined);
+            }
+        }
+        let width = if c.is_ascii() { 0.6 } else { 1.0 };
+        clusters.push((text, width));
     }
+    clusters
+}
+
+/// Greedy line filling: breaks at spaces and between non-ASCII clusters, splitting an ASCII
+/// word only when it is wider than a whole line.
+fn fill_lines(line: &str, budget: f64) -> Vec<String> {
+    // Units: ASCII words stay whole, every other cluster stands alone, spaces separate.
+    let mut units: Vec<(String, f64, bool)> = Vec::new();
+    for (text, width) in glyph_clusters(line) {
+        let ascii_word = text.chars().all(|c| c.is_ascii() && c != ' ');
+        match units.last_mut() {
+            Some(last) if ascii_word && last.2 => {
+                last.0.push_str(&text);
+                last.1 += width;
+            }
+            _ => units.push((text, width, ascii_word)),
+        }
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut used = 0.0;
+    let mut push_line = |current: &mut String, used: &mut f64| {
+        lines.push(current.trim_end().to_string());
+        current.clear();
+        *used = 0.0;
+    };
+    for (text, width, ascii_word) in units {
+        let space = text == " ";
+        if space && current.is_empty() {
+            continue;
+        }
+        if used + width > budget && !current.is_empty() && !space {
+            push_line(&mut current, &mut used);
+        }
+        if ascii_word && width > budget {
+            // A word wider than a line: split it by characters.
+            for (piece, piece_width) in glyph_clusters(&text) {
+                if used + piece_width > budget && !current.is_empty() {
+                    push_line(&mut current, &mut used);
+                }
+                current.push_str(&piece);
+                used += piece_width;
+            }
+            continue;
+        }
+        current.push_str(&text);
+        used += width;
+    }
+    lines.push(current.trim_end().to_string());
     lines
 }
 
+/// Break text into lines whose estimated width (full-width glyph = 1, ASCII = 0.6) fits the
+/// budget, then even them out so that no line is left with a stray last character.
+fn wrap_to_width(text: &str, budget: f64) -> Vec<String> {
+    let mut lines = Vec::new();
+    for line in text.split('\n') {
+        let greedy = fill_lines(line, budget);
+        let count = greedy.len();
+        if count < 2 {
+            lines.extend(greedy);
+            continue;
+        }
+        // The narrowest width that still gives the same number of lines.
+        let (mut low, mut high) = (budget / count as f64, budget);
+        for _ in 0..24 {
+            let middle = (low + high) / 2.0;
+            if fill_lines(line, middle).len() <= count {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        lines.extend(fill_lines(line, high));
+    }
+    lines
+}
 pub fn make_ass(title: &str, cues: &[Cue], duration: f64, tempo: f64) -> Result<String> {
     make_ass_styled(
         title,
@@ -340,6 +436,39 @@ pub fn make_ass_templated(
     )
 }
 
+/// Left, right, bottom and top margins in pixels. A template can only widen the built-in
+/// platform safe area; its horizontal or vertical value follows the video orientation.
+pub(crate) fn layout_margins(
+    preset: VideoPreset,
+    template: Option<&crate::template::Template>,
+) -> (u32, u32, u32, u32) {
+    let (width, height) = preset.dimensions();
+    let scale = width as f64 / 1280.0;
+    let scaled = |value: f64| (value * scale).round() as u32;
+    let portrait = matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd);
+    let (mut left, mut right, mut bottom, mut top) = if portrait {
+        let factor = width as f64 / 1080.0;
+        let safe = |value: f64| (value * factor).round() as u32;
+        (safe(80.0), safe(160.0), safe(320.0), safe(160.0))
+    } else {
+        (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
+    };
+    if let Some(template) = template {
+        let margin = if portrait {
+            template.vertical_margin
+        } else {
+            template.horizontal_margin
+        };
+        let side = (margin * width as f64).round() as u32;
+        let edge = (margin * height as f64).round() as u32;
+        left = left.max(side);
+        right = right.max(side);
+        top = top.max(edge);
+        bottom = bottom.max(edge);
+    }
+    (left, right, bottom, top)
+}
+
 fn ass_with_layout(
     title: &str,
     cues: &[Cue],
@@ -354,29 +483,7 @@ fn ass_with_layout(
     let (width, height) = preset.dimensions();
     let scale = width as f64 / 1280.0;
     let scaled = |value: f64| (value * scale).round() as u32;
-    let portrait = matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd);
-    let (mut left, mut right, mut bottom, mut top) =
-        if matches!(preset, VideoPreset::Vertical | VideoPreset::VerticalUhd) {
-            let factor = width as f64 / 1080.0;
-            let safe = |value: f64| (value * factor).round() as u32;
-            (safe(80.0), safe(160.0), safe(320.0), safe(160.0))
-        } else {
-            (scaled(60.0), scaled(60.0), scaled(80.0), scaled(32.0))
-        };
-    if let Some(template) = template {
-        // Never smaller than the built-in platform safe area; the template can only widen it.
-        let margin = if portrait {
-            template.vertical_margin
-        } else {
-            template.horizontal_margin
-        };
-        let side = (margin * width as f64).round() as u32;
-        let edge = (margin * height as f64).round() as u32;
-        left = left.max(side);
-        right = right.max(side);
-        top = top.max(edge);
-        bottom = bottom.max(edge);
-    }
+    let (left, right, bottom, top) = layout_margins(preset, template);
     let font = &style.font;
     let accent = style.ass_accent()?;
     let lyric_size = scaled(44.0);
@@ -387,7 +494,15 @@ fn ass_with_layout(
     let fixed_wrap = template.is_some() && !cues.is_empty();
     let wrap_style = if fixed_wrap { 2 } else { 0 };
     let available = width.saturating_sub(left + right) as f64;
-    let wrapped = |text: &str, size: u32| -> Vec<String> {
+    let logo_reserve = if template.is_some_and(|t| t.logo.is_some()) {
+        // Room kept free on both sides of the title for a logo of up to a quarter of the width.
+        (available * 0.25).round() as u32 + scaled(16.0)
+    } else {
+        0
+    };
+    let (title_left, title_right) = (left + logo_reserve, right + logo_reserve);
+    let title_available = width.saturating_sub(title_left + title_right) as f64;
+    let wrapped = |text: &str, size: u32, available: f64| -> Vec<String> {
         if fixed_wrap {
             wrap_to_width(text, available / (size as f64 * 1.1))
         } else {
@@ -397,7 +512,7 @@ fn ass_with_layout(
     if let (Some(template), true) = (template, fixed_wrap) {
         for cue in cues {
             ensure!(
-                wrapped(&cue.text, lyric_size).len() <= template.max_lines as usize,
+                wrapped(&cue.text, lyric_size, available).len() <= template.max_lines as usize,
                 "字幕が{}行を超えます。余白か行数を調整してください。",
                 template.max_lines
             );
@@ -408,12 +523,12 @@ fn ass_with_layout(
     let shadow = scaled(1.0);
     // libass rasterizes the vector glyphs after scaling the video to the target size.
     let mut ass = format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: {wrap_style}\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{left},{right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: {wrap_style}\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Lyrics,{font},{lyric_size},{accent},&H00FFFFFF,&H00202020,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{left},{right},{bottom},1\nStyle: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,{title_outline},0,8,{title_left},{title_right},{top},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     );
     ass.push_str(&format!(
         "Dialogue: 0,0:00:00.00,{},Title,,0,0,0,,{}\n",
         stamp(duration / tempo),
-        ass_text(&wrapped(title, title_size).join("\n"))
+        ass_text(&wrapped(title, title_size, title_available).join("\n"))
     ));
     for (index, cue) in cues.iter().enumerate() {
         let end = cues
@@ -428,7 +543,7 @@ fn ass_with_layout(
             "Dialogue: 1,{},{},Lyrics,,0,0,0,,{{\\kf{fill}}}{}\n",
             stamp(cue.seconds / tempo),
             stamp(end / tempo),
-            ass_text(&wrapped(&cue.text, lyric_size).join("\n"))
+            ass_text(&wrapped(&cue.text, lyric_size, available).join("\n"))
         ));
     }
     Ok(ass)
@@ -490,6 +605,71 @@ mod tests {
             .unwrap();
         let f: Vec<&str> = style.split(',').collect();
         f[19..22].iter().map(|v| v.parse().unwrap()).collect()
+    }
+    #[test]
+    fn title_keeps_clear_of_the_logo_corner() {
+        let dir = tempfile::tempdir().unwrap();
+        let logo = dir.path().join("logo.png");
+        std::fs::write(&logo, b"\x89PNG\r\n\x1a\nrest").unwrap();
+        let cues = parse_lrc("[00:01.00]歌\n[00:02.00]\n").unwrap();
+        let mut t = template(0.1, 0.1, 2);
+        let plain = make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &t).unwrap();
+        t.logo = Some(logo);
+        let with_logo =
+            make_ass_templated("曲", &cues, 3.0, 1.0, VideoPreset::Vertical, &t).unwrap();
+        let title_margins = |ass: &str| -> Vec<u32> {
+            let style = ass.lines().find(|l| l.starts_with("Style: Title")).unwrap();
+            let f: Vec<&str> = style.split(',').collect();
+            f[19..22].iter().map(|v| v.parse().unwrap()).collect()
+        };
+        // Both sides give up a quarter of the safe width plus a gap, so the centred title
+        // can never reach a logo of up to that width in the top-right corner.
+        let (a, b) = (title_margins(&plain), title_margins(&with_logo));
+        assert!(b[0] >= a[0] + 150 && b[1] >= a[1] + 150, "{a:?} {b:?}");
+        assert_eq!(b[2], a[2]);
+    }
+    #[test]
+    fn wrapping_balances_lines_and_never_splits_what_belongs_together() {
+        // 20 full-width characters over a budget of 19: two even lines, not 19 + 1.
+        let lines = wrap_to_width("あいうえおかきくけこさしすせそたちつてと", 19.0);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.chars().count() >= 9), "{lines:?}");
+        // English breaks at spaces only; no word is cut and no space is left at a line end.
+        let text = "neon lights tonight and more neon lights tonight";
+        let lines = wrap_to_width(text, 14.0);
+        assert!(lines.len() > 1);
+        assert_eq!(lines.join(" "), text, "{lines:?}");
+        assert!(lines.iter().all(|l| l == l.trim()), "{lines:?}");
+        // A combining voiced mark never starts a line.
+        let lines = wrap_to_width(&"か\u{3099}".repeat(30), 21.0);
+        assert!(lines.len() > 1);
+        assert!(
+            lines.iter().all(|l| !l.starts_with('\u{3099}')),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|l| l.chars().count() % 2 == 0),
+            "{lines:?}"
+        );
+        // ZWJ emoji and flags stay whole.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let lines = wrap_to_width(&family.repeat(12), 5.0);
+        assert!(lines.len() > 1);
+        assert!(
+            lines.iter().all(|l| l.chars().count() % 5 == 0),
+            "{lines:?}"
+        );
+        let lines = wrap_to_width(&"\u{1F1FA}\u{1F1F8}".repeat(12), 5.0);
+        assert!(
+            lines.iter().all(|l| l.chars().count() % 2 == 0),
+            "{lines:?}"
+        );
+        // Closing punctuation stays with the text before it.
+        let lines = wrap_to_width(&format!("{}。", "あ".repeat(10)), 10.0);
+        assert!(lines.iter().all(|l| !l.starts_with('。')), "{lines:?}");
+        // A single word wider than a line is split instead of overflowing.
+        let lines = wrap_to_width("supercalifragilisticexpialidocious", 10.0);
+        assert!(lines.len() > 1 && lines.concat() == "supercalifragilisticexpialidocious");
     }
     #[test]
     fn template_margins_apply_per_orientation_and_never_shrink_safe_area() {
