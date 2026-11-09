@@ -589,6 +589,8 @@ pub fn export(
             lyrics::layout_margins(options.preset, options.template.as_ref());
         let max_width = ((width - left - right) as f64 * 0.25).round() as u32;
         let max_height = (height as f64 * 0.1).round() as u32;
+        let (logo_width, logo_height) =
+            crate::ass_layout::scaled_image(logo, max_width, max_height)?;
         let edge = width - right;
         args.extend([
             "-protocol_whitelist".into(),
@@ -602,7 +604,7 @@ pub fn export(
         ]);
         args.extend([
             "-filter_complex".into(),
-            format!("[{video_map}]{base}[bg];[2:v]scale=w={max_width}:h={max_height}:force_original_aspect_ratio=decrease,format=rgba[logo];[bg][logo]overlay={edge}-w:{top},ass=lyrics.ass[v]"),
+            format!("[{video_map}]{base}[bg];[2:v]scale={logo_width}:{logo_height},format=rgba[logo];[bg][logo]overlay={edge}-w:{top},ass=lyrics.ass[v]"),
             "-map".into(), "[v]".into(),
         ]);
     } else {

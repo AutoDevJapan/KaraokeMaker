@@ -1,4 +1,5 @@
 pub mod alignment;
+mod ass_layout;
 pub mod entry;
 pub mod inspect;
 pub mod lyrics;

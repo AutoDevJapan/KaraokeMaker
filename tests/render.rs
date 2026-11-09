@@ -1124,3 +1124,97 @@ fn revision_keeps_the_saved_template_and_old_results_without_one_still_revise() 
     let ass = fs::read_to_string(revised_legacy.join("lyrics.ass")).unwrap();
     assert!(!ass.contains(",384,384,"));
 }
+#[test]
+fn measured_multiline_word_highlights_later_lines_during_its_original_interval() {
+    use karaoke_maker::{alignment::Word, presentation::VideoPreset, template::Template};
+    let temp = tempfile::tempdir().unwrap();
+    for (preset, w, h) in [
+        (VideoPreset::FullHd, 1920usize, 1080usize),
+        (VideoPreset::Vertical, 1080, 1920),
+    ] {
+        let t = Template {
+            version: 1,
+            project: "test".into(),
+            style: Default::default(),
+            background_image: None,
+            logo: None,
+            horizontal_margin: 0.1,
+            vertical_margin: 0.1,
+            max_lines: 4,
+        };
+        let words = vec![Word {
+            text: "あいうえおかきくけこ".repeat(4),
+            start: 0.1,
+            end: 0.9,
+            confidence: 1.0,
+            join_previous: false,
+            line_index: 0,
+        }];
+        let ass =
+            karaoke_maker::lyrics::make_ass_words("", &words, 1.0, 1.0, preset, &t.style, Some(&t))
+                .unwrap();
+        let dir = temp.path().join(w.to_string());
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("lyrics.ass"), ass).unwrap();
+        let mut last_rows = Vec::new();
+        let mut late_green = Vec::new();
+        for second in ["0.2", "0.5", "0.8"] {
+            let frame = media::hidden_command(Tools::discover().ffmpeg)
+                .current_dir(&dir)
+                .args(["-v", "error", "-f", "lavfi", "-i"])
+                .arg(format!("color=black:s={w}x{h}:r=30:d=1"))
+                .args([
+                    "-vf",
+                    "ass=lyrics.ass",
+                    "-ss",
+                    second,
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ])
+                .output()
+                .unwrap();
+            assert!(frame.status.success());
+            let mut rows = vec![0usize; h];
+            let mut green = vec![0usize; h];
+            for y in 0..h {
+                for x in 0..w {
+                    let p = &frame.stdout[(y * w + x) * 3..(y * w + x) * 3 + 3];
+                    if p.iter().copied().max().unwrap() > 200 {
+                        rows[y] += 1
+                    }
+                    if p[1] > 200 && p[0] > 160 && p[2] < 210 && p[1].saturating_sub(p[2]) > 25 {
+                        green[y] += 1
+                    }
+                }
+            }
+            last_rows = rows;
+            late_green.push(green);
+        }
+        let mut bands = Vec::new();
+        let mut start = None;
+        for (y, &ink) in last_rows.iter().enumerate() {
+            if ink > 0 && start.is_none() {
+                start = Some(y)
+            }
+            if ink == 0 && start.is_some() {
+                bands.push((start.take().unwrap(), y));
+            }
+        }
+        assert!(bands.len() >= 2, "expected multiline {w}");
+        let (a, b) = *bands.last().unwrap();
+        assert_eq!(
+            late_green[0][a..b].iter().sum::<usize>(),
+            0,
+            "last line starts too early {w}"
+        );
+        assert!(
+            late_green[2][a..b].iter().sum::<usize>() > 100,
+            "last line never highlighted {w}"
+        );
+    }
+}
