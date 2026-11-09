@@ -434,6 +434,10 @@ pub fn export(
     if !options.words.is_empty() {
         cues.retain(|cue| cue.seconds < duration);
     }
+    if options.template.is_some() {
+        progress
+            .set("字幕の幅と配置を確認しています。初回は歌詞の量により数分かかることがあります。");
+    }
     let ass = if !options.words.is_empty() {
         lyrics::make_ass_words(
             &options.title,
@@ -825,6 +829,11 @@ pub fn convert(
         || options.lyrics.trim().starts_with('[')
         || options.lyrics.trim().is_empty()
     {
+        if options.template.is_some() {
+            progress.set(
+                "字幕の幅と配置を確認しています。初回は歌詞の量により数分かかることがあります。",
+            );
+        }
         check_lyrics_layout(options, duration)?;
     }
     progress.set("歌声と伴奏を分離しています。初回はモデルを取得します。");
