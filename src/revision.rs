@@ -67,10 +67,11 @@ pub fn timed_lines_from_lrc(text: &str, duration: f64) -> Result<Vec<TimedLine>>
         "曲の長さが不正です。"
     );
     let cues = lyrics::parse_lrc(text)?;
-    let rounded_end = (duration * 100.0).round() / 100.0;
+    let end_centiseconds = (duration * 100.0).round() as u64;
     ensure!(
         cues.iter().all(|cue| cue.seconds <= duration
-            || (cue.text.trim().is_empty() && cue.seconds == rounded_end)),
+            || (cue.text.trim().is_empty()
+                && (cue.seconds * 100.0).round() as u64 == end_centiseconds)),
         "曲の長さを超える歌詞の時刻があります。"
     );
     let mut lines = Vec::new();
@@ -245,11 +246,29 @@ mod timing_tests {
     }
     #[test]
     fn accepted_edits_remain_readable_at_rounded_song_end() {
-        let duration = 5.006;
-        let saved = timed_lines_lrc(&[line(1.0, duration, "end")], duration).unwrap();
-        let reopened = timed_lines_from_lrc(&saved, duration).unwrap();
-        assert_eq!(reopened[0].end, duration);
-        assert_eq!(timed_lines_lrc(&reopened, duration).unwrap(), saved);
+        for duration in [5.006, 59.996, 60.006, 68.036, 599.996, 899.996] {
+            let saved = timed_lines_lrc(&[line(1.0, duration, "end")], duration).unwrap();
+            let reopened = timed_lines_from_lrc(&saved, duration).unwrap();
+            assert!((reopened[0].end - duration).abs() <= 0.005);
+            assert_eq!(timed_lines_lrc(&reopened, duration).unwrap(), saved);
+            let beyond = (duration * 100.0).round() as u64 + 1;
+            let invalid = format!(
+                "[00:01.00]end\n[{:02}:{:02}.{:02}]\n",
+                beyond / 6000,
+                beyond / 100 % 60,
+                beyond % 100
+            );
+            assert!(
+                timed_lines_from_lrc(&invalid, duration).is_err(),
+                "{duration}"
+            );
+        }
+        for ticks in 6000..90_000 {
+            let duration = ticks as f64 / 100.0 + 0.006;
+            let saved = timed_lines_lrc(&[line(1.0, duration, "end")], duration).unwrap();
+            let reopened = timed_lines_from_lrc(&saved, duration).unwrap();
+            assert_eq!(timed_lines_lrc(&reopened, duration).unwrap(), saved);
+        }
     }
     #[test]
     fn ambiguous_or_oversized_lyrics_do_not_replace_valid_draft() {
