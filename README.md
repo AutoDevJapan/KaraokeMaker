@@ -102,6 +102,8 @@ FFmpegはPCに導入したものを呼び出し、このリポジトリやZIPに
 
 制作者向けCLIでは `convert` と `render` に `--preset 1080p`、`--preset 1440p`、`--preset 4k`（3840×2160）、`--preset vertical`、`--style ./style.json` を付けられます。`render` は指定した完成音源や提供伴奏へ字幕を付け、音源分離なしで映像を作り直します。LRC・SRT・ASSも出力します。詳しい使い方は制作手順を参照してください。
 
+背景画像・ロゴ・余白・行数・配色・フォントを案件別に再利用するCLIの使い方は、[テンプレートの保存と出力](docs/templates.md)を参照してください。`--template` と `--project` を指定し、新しい結果フォルダへ出力します。
+
 ## ライセンス
 
 本リポジトリの独自コードは [Apache-2.0](LICENSE) で提供します。
