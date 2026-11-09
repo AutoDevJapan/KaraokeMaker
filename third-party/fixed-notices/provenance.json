@@ -862,7 +862,7 @@
     "revision": "4225763d744183d720f575ae96d04161b4d08ea0",
     "crate": "hexf-parse",
     "sha256": "4a56dbdbc12054fd33b7a2634a45cbbe6fe12f5e6f4081002cbfa527f7220c70",
-    "source": "https://github.com/lifthrasiir/hexf/blob/4225763d744183d720f575ae96d04161b4d08ea0/Cargo.toml.orig"
+    "source": "https://github.com/lifthrasiir/hexf/blob/4225763d744183d720f575ae96d04161b4d08ea0/parse/Cargo.toml"
   },
   {
     "note": "Fixed package/upstream contains no standalone license file; declaration and author metadata retained without invented copyright",
@@ -880,6 +880,6 @@
     "revision": "d0d4eee0525fd27c96c8a046d6d107acd5ed84a6",
     "crate": "realfft",
     "sha256": "d72ddbadf9bb55ed21ae973ac97f0bb4e8df2064af628c54b802b2c7d764c8de",
-    "source": "https://github.com/HEnquist/realfft/blob/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6/Cargo.toml.orig"
+    "source": "https://github.com/HEnquist/realfft/blob/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6/Cargo.toml"
   }
 ]
