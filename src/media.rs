@@ -553,6 +553,8 @@ pub fn export(
             "1".into(),
             "-framerate".into(),
             "30".into(),
+            "-protocol_whitelist".into(),
+            "file".into(),
             "-i".into(),
             image.display().to_string(),
         ]);
@@ -578,7 +580,12 @@ pub fn export(
         // The logo sits in the top-right corner inside the safe margin; subtitles are drawn last.
         let margin = (height as f64 * 0.04).round() as u32;
         let logo_height = (height as f64 * 0.1).round() as u32;
-        args.extend(["-i".into(), logo.display().to_string()]);
+        args.extend([
+            "-protocol_whitelist".into(),
+            "file".into(),
+            "-i".into(),
+            logo.display().to_string(),
+        ]);
         args.extend([
             "-filter_complex".into(),
             format!("[{video_map}]{base}[bg];[2:v]scale=-2:{logo_height},format=rgba[logo];[bg][logo]overlay=W-w-{margin}:{margin},ass=lyrics.ass[v]"),

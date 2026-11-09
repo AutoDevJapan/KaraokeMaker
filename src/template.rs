@@ -45,6 +45,16 @@ impl Template {
                 path.is_absolute() && path.is_file(),
                 "素材の絶対パスを確認してください。"
             );
+            // Only plain still images; playlists and other container formats can name
+            // further inputs, so they are refused before ffmpeg ever opens them.
+            let extension = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            ensure!(
+                matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg")),
+                "素材はPNGまたはJPEGの画像にしてください。"
+            );
         }
         Ok(())
     }
@@ -174,5 +184,22 @@ mod tests {
         value = template();
         value.logo = Some(dir.path().join("missing.png"));
         assert!(value.validate("project-a").is_err());
+    }
+    #[test]
+    fn only_png_or_jpeg_files_are_accepted_as_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = template();
+        for (name, accepted) in [
+            ("logo.png", true),
+            ("logo.JPG", true),
+            ("list.m3u8", false),
+            ("movie.mp4", false),
+            ("noext", false),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, b"x").unwrap();
+            value.logo = Some(path);
+            assert_eq!(value.validate("project-a").is_ok(), accepted, "{name}");
+        }
     }
 }
