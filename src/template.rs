@@ -59,14 +59,32 @@ impl Template {
     pub fn save_new(&self, path: &Path, project: &str) -> Result<()> {
         self.validate(project)?;
         let bytes = serde_json::to_vec_pretty(self)?;
-        let mut output = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)?;
-        output.write_all(&bytes)?;
-        output.sync_all()?;
-        Ok(())
+        write_new(path, |output| output.write_all(&bytes))
     }
+}
+
+fn write_new(path: &Path, write: impl FnOnce(&mut fs::File) -> std::io::Result<()>) -> Result<()> {
+    write_new_with(path, write, |path| fs::remove_file(path))
+}
+
+fn write_new_with(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> std::io::Result<()>,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<()> {
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    let result = write(&mut output).and_then(|()| output.sync_all());
+    drop(output);
+    if let Err(error) = result {
+        if let Err(cleanup) = remove(path) {
+            return Err(error).map_err(|error| anyhow::anyhow!("保存に失敗しました: {error}。未完成ファイル {} の回収にも失敗しました: {cleanup}", path.display()));
+        }
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -83,6 +101,53 @@ mod tests {
             vertical_margin: 0.15,
             max_lines: 2,
         }
+    }
+    #[test]
+    fn failed_cleanup_reports_original_error_and_remaining_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.json");
+        let error = write_new_with(
+            &path,
+            |file| {
+                file.write_all(b"partial")?;
+                Err(std::io::Error::other("original write failure"))
+            },
+            |_| Err(std::io::Error::other("cleanup failure")),
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("original write failure"));
+        assert!(message.contains("cleanup failure"));
+        assert!(message.contains(&path.display().to_string()));
+        assert_eq!(fs::read(&path).unwrap(), b"partial");
+    }
+    #[test]
+    fn interrupted_new_write_is_removed_and_existing_file_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("template.json");
+        let result = write_new(&path, |output| {
+            output.write_all(b"partial")?;
+            Err(std::io::Error::other("injected write failure"))
+        });
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("injected write failure")
+        );
+        assert!(!path.exists());
+        fs::write(&path, b"original").unwrap();
+        let mut called = false;
+        assert!(
+            write_new(&path, |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        assert_eq!(fs::read(path).unwrap(), b"original");
     }
     #[test]
     fn saved_settings_roundtrip_without_overwriting_or_crossing_projects() {
