@@ -279,6 +279,13 @@ fn run() -> Result<()> {
                     .write_all(&json)?;
             }
             println!("{}", String::from_utf8(json)?);
+            if report.operator_review.as_ref().is_some_and(|review| {
+                review.full_listening == "fail" || review.full_visual_check == "fail"
+            }) {
+                eprintln!(
+                    "人手確認に不合格があります。終了コードは自動検査の結果です。operator_reviewを確認してください。"
+                );
+            }
             anyhow::ensure!(
                 report.passed(),
                 "納品物の自動検査に不合格の項目があります。結果のJSONを確認してください。"

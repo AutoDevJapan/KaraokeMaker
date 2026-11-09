@@ -778,6 +778,7 @@ fn cli_manual_reviews_require_settings_and_reject_settings_only_changes() {
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["operator_review"]["full_visual_check"], "fail");
     assert_eq!(report["manual_review_complete"], false);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("人手確認に不合格"));
     // Every other input is unchanged from the fully accepted baseline.
     fs::write(&settings, b"{} ").unwrap();
     let output = cli(&args);

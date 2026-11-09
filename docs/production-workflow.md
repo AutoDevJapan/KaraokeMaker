@@ -120,6 +120,8 @@ karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery
 
 記入後、同じsource・settings・納品物を指定した検査に `--manual-review ./delivery/manual.json` を加えて、別名の検査JSONへ保存する。今回計算した原音・設定・全納品物のハッシュと完全一致しない記録、未記入の結果、確認者・日時が空の記録は拒否する。記入内容は `operator_review` に保持する。確認者名は自己申告で、認証済み署名ではない。`manual_review_complete` と自動検査の意味は変えず、人手の不合格も消さない。原音や納品物を変更したら再確認し、新しい記録を作る。記録には非公開の素材パスや担当名が含まれるので、Gitや公開Issueに追加しない。
 
+終了コード0は自動検査の合格だけを表す。人手確認に `fail` があれば標準エラーにも警告するが、終了コードと `automatic_result` は自動検査の意味を保つ。納品の判断ではJSONの `operator_review` と未確認項目を必ず読み、人手の不合格を自動検査の合格で置き換えない。
+
 ## 担当が作った動作確認動画の片付け（2026-10-08）
 
 担当が作成した動作例・検証録画は、検査と報告が終わり、制作中やアプリで使う最新ファイルでないことを確認してから、`D:/CC/Tools/video-archive/video-archive.exe register`へ登録する。ユーザーが持ち込んだ原曲・動画・歌詞、顧客資源、現在利用している最新の変換結果は登録・転送・削除しない。既存の外部AIへ素材を送らない規則を維持する。
