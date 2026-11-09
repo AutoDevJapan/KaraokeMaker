@@ -205,7 +205,9 @@
     "file": "LICENSE-APACHE",
     "crate": "cubecl-ir",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930",
+    "original_reference": "../../LICENSE-APACHE",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE"
   },
   {
     "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
@@ -213,7 +215,9 @@
     "file": "LICENSE-MIT",
     "crate": "cubecl-ir",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4",
+    "original_reference": "../../LICENSE-MIT",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT"
   },
   {
     "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
@@ -221,7 +225,9 @@
     "file": "LICENSE-APACHE",
     "crate": "cubecl-macros-internal",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930",
+    "original_reference": "../../LICENSE-APACHE",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE"
   },
   {
     "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
@@ -229,7 +235,9 @@
     "file": "LICENSE-MIT",
     "crate": "cubecl-macros-internal",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4",
+    "original_reference": "../../LICENSE-MIT",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT"
   },
   {
     "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
@@ -237,7 +245,9 @@
     "file": "LICENSE-APACHE",
     "crate": "cubecl-macros",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930"
+    "sha256": "bdd26d197850a30393da963f01e97c78e91d69245089c543903f96a5dab95930",
+    "original_reference": "../../LICENSE-APACHE",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE"
   },
   {
     "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT",
@@ -245,7 +255,9 @@
     "file": "LICENSE-MIT",
     "crate": "cubecl-macros",
     "revision": "2679028d1c62b9f432e77a0acb952c06481dd7a9",
-    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4"
+    "sha256": "b3b77503e5498c5fb0a1a0b102d748d7baed9cae9f502086a3cfedad62d503a4",
+    "original_reference": "../../LICENSE-MIT",
+    "resolved_source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-MIT"
   },
   {
     "source": "https://github.com/tracel-ai/cubecl/blob/2679028d1c62b9f432e77a0acb952c06481dd7a9/LICENSE-APACHE",
@@ -557,7 +569,9 @@
     "file": "LICENSE-APACHE",
     "crate": "tracel-ash",
     "revision": "1f2b476be67ed12f3cb61ef96c54c4aa4de14814",
-    "sha256": "0e8a410375e1ee5c75c6198b08b534fec6e5edef766cf971bab4a404542636ab"
+    "sha256": "0e8a410375e1ee5c75c6198b08b534fec6e5edef766cf971bab4a404542636ab",
+    "original_reference": "../LICENSE-APACHE",
+    "resolved_source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-APACHE"
   },
   {
     "source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-MIT",
@@ -565,7 +579,9 @@
     "file": "LICENSE-MIT",
     "crate": "tracel-ash",
     "revision": "1f2b476be67ed12f3cb61ef96c54c4aa4de14814",
-    "sha256": "c733ccf8ab25df175a63d9d844677b98e3a5ab8f8de1c1616087e6868a7f948e"
+    "sha256": "c733ccf8ab25df175a63d9d844677b98e3a5ab8f8de1c1616087e6868a7f948e",
+    "original_reference": "../LICENSE-MIT",
+    "resolved_source": "https://github.com/ash-rs/ash/blob/1f2b476be67ed12f3cb61ef96c54c4aa4de14814/LICENSE-MIT"
   },
   {
     "source": "crates.io package",
@@ -605,7 +621,9 @@
     "file": "LICENSE.APACHE",
     "crate": "wgpu-core",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "original_reference": "../LICENSE.APACHE",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE"
   },
   {
     "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT",
@@ -613,7 +631,9 @@
     "file": "LICENSE.MIT",
     "crate": "wgpu-core",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4",
+    "original_reference": "../LICENSE.MIT",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT"
   },
   {
     "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE",
@@ -621,7 +641,9 @@
     "file": "LICENSE.APACHE",
     "crate": "wgpu-types",
     "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
-    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "original_reference": "../LICENSE.APACHE",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE"
   },
   {
     "source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT",
@@ -629,7 +651,9 @@
     "file": "LICENSE.MIT",
     "crate": "wgpu-types",
     "revision": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
-    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4",
+    "original_reference": "../LICENSE.MIT",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT"
   },
   {
     "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE",
@@ -637,7 +661,9 @@
     "file": "LICENSE.APACHE",
     "crate": "wgpu",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "original_reference": "../LICENSE.APACHE",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.APACHE"
   },
   {
     "source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT",
@@ -645,7 +671,9 @@
     "file": "LICENSE.MIT",
     "crate": "wgpu",
     "revision": "0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47",
-    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
+    "sha256": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4",
+    "original_reference": "../LICENSE.MIT",
+    "resolved_source": "https://github.com/gfx-rs/wgpu/blob/0c978d0d46c7eaf68f6d1ecf2ea1bd03a96b7c47/LICENSE.MIT"
   },
   {
     "source": "crates.io package",
