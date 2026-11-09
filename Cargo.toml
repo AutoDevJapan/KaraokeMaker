@@ -36,6 +36,7 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "load-dynamic", "directml", "cuda"], optional = true }
 realfft = "=3.5.0"
+zip = { version = "=7.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 tempfile = "3"

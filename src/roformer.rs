@@ -49,10 +49,7 @@ pub fn separate(left: &[f32], right: &[f32], model: &Path, progress: &Progress) 
         left.len() == right.len() && !left.is_empty(),
         "音源の左右の長さが不正です。"
     );
-    let half = model
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().contains("fp16"));
-    crate::runtime::initialize(half)?;
+    crate::runtime::initialize_for_model(model, progress)?;
     progress.set("Mel-Band RoFormerをGPUへ読み込んでいます。");
     let cuda = CUDAExecutionProvider::default();
     let provider = if cuda.is_available()? {

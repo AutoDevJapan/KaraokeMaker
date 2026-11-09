@@ -37,7 +37,9 @@ jobs:
           Copy-Item target/release/karaoke-maker.exe dist/KaraokeMaker/KaraokeMaker.exe
           Copy-Item target/release/karaoke-maker-cli.exe dist/KaraokeMaker/karaoke-maker-cli.exe
           Copy-Item LICENSE dist/KaraokeMaker/
-          (Get-Content docs/windows-package.md -Raw).Replace('[依存先の条件](dependencies.md)', '[依存先の条件](docs/dependencies.md)') | Set-Content dist/KaraokeMaker/README.md
+          $packageReadme = (Get-Content docs/windows-package.md -Raw).Replace('[依存先の条件](dependencies.md)', '[依存先の条件](docs/dependencies.md)')
+          $packageReadme = $packageReadme.Replace('[高音質分離の初回準備](runtime-setup.md)', '[高音質分離の初回準備](docs/runtime-setup.md)')
+          $packageReadme | Set-Content dist/KaraokeMaker/README.md
           Copy-Item docs dist/KaraokeMaker/docs -Recurse
           Copy-Item dist/KaraokeMaker/README.md dist/KaraokeMaker/START-HERE.md
           New-Item -ItemType Directory dist/KaraokeMaker/third-party/demucs-core | Out-Null

@@ -13,6 +13,8 @@ pub mod quality;
 pub mod revision;
 pub mod roformer;
 pub mod runtime;
+#[cfg(any(feature = "ort", test))]
+mod runtime_setup;
 pub mod spectral;
 pub mod suno;
 pub mod template;
