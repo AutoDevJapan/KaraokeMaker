@@ -343,6 +343,10 @@ fn render_revision_inner(
         template: previous.template.clone(),
         project: previous.project.clone(),
         sample_rate: previous.sample_rate,
+        // These stems were already separated. Preserve their model instead of
+        // recording today's default, and do not claim/request another ASR run.
+        separation: previous.separation,
+        automatic_subtitles: false,
         original_video: false,
         ..Options::default()
     };
