@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | windows | 0.58.0 | MIT OR Apache-2.0 |
 | realfft | 3.5.0 | MIT |
+| zip | 7.2.0 | MIT |
 | ort | 2.0.0-rc.10 | MIT OR Apache-2.0 |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 |
 | axum | 0.8.9 | MIT |
@@ -38,6 +39,8 @@
 
 WindowsのONNX実行部品はMicrosoft.ML.OnnxRuntime.Gpu.Windows 1.24.4（MIT）。onnxruntime.dll SHA-256は `3b46571d12a9567791a42a2b2967a79c4e2e957aacdba09a2ddb4fb391707baa`。CUDA Runtime 12.8.90、cuBLAS 12.8.4.1、cuFFT 11.3.3.83、cuDNN 9.14.0.64はNVIDIAの公開再配布物を取得して公開SHA-256と照合した。アーカイブのNVIDIAライセンスを導入先へ保持。課金APIを使わずPC内推論に用いる。部品は `D:/CC/Tools/onnxruntime-cuda/1.24.4/runtime` にまとめ、CPU/GPUが同じDLLを使う。実行ファイルだけ他PCへコピーして全機能が動くとは扱わない。
 
+上記は以前の制作PC向け導入先。未導入のWindowsでは[初回準備](runtime-setup.md)が同じ固定版をアプリの `data/runtime` に導入するため、この固定ドライブを用意する必要はない。取得アーカイブのサイズ・SHA-256は `resources/cuda-runtime.json` に固定し、元のライセンス・通知を改変せず保存する。展開に使用するzip 7.2.0のMIT原文も `third-party/fixed-notices/zip-7.2.0/LICENSE` に保持する。
+
 字幕候補のwhisper.cpp 1.9.2はMIT。ggml-large-v3-turbo-q5_0.binは574,041,195 bytes。英語CTCは [onnx-community/wav2vec2-base-960h-ONNX](https://huggingface.co/onnx-community/wav2vec2-base-960h-ONNX) のrevision `729c1a6730fb549c20a1c73a3d3f96f11020225e`、95,212,816 bytes、SHA-256 `1d9a366c27b2966625cd5035ac3db8847c53bba617169912bb251b42975a3a22`。上流はApache-2.0。Windows OCRはOS機能を内部の字幕フレーム確認に使用。
 
 公式Windows yt-dlp 2026.08.19は本人曲の内部取得に使用。コアはUnlicense、依存を含む配布exeはGPLv3+の条件。ダウンローダーを製品へ同梱しない。
@@ -52,5 +55,5 @@ DemucsのコードのMITとモデルの条件は異なる。作者は[モデル�
 
 依存のライセンス宣言はCargoのキャッシュ内の各固定版manifestで確認できる。モデル・外部実行ファイル・フォントを含めたアプリ自体の販売や再配布は、今回の制作サービスと別の作業として扱う。今回の納品物は音声・動画・字幕であり、ソフトウェアやモデルの複製ではない。
 
-照合用Cargo.lock SHA-256: `5874490003c9e44467b2ad8a8d131a7c3bdf23f32182cf333ddc945944e68d0e`
+照合用Cargo.lock SHA-256: `0fef5c587dbbfef85fd76ac0093d11623a3e5f44022232847620386c9e200dd8`
 制作PCのYuGothM.ttc SHA-256: `cb2021bbfe40b21ec564848b8d702125661594e1b4f1eb2e77fd8a98b485cf19`

@@ -1,0 +1,37 @@
+[
+  {
+    "name": "onnxruntime", "version": "1.24.4",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.windows/1.24.4/microsoft.ml.onnxruntime.gpu.windows.1.24.4.nupkg",
+    "size": 172417405,
+    "sha256": "e897a13d318483e71e1eef91005634846201ab50bc6a582ae913dc5a6ccc0240",
+    "dlls": ["onnxruntime.dll", "onnxruntime_providers_shared.dll", "onnxruntime_providers_cuda.dll"]
+  },
+  {
+    "name": "cuda-cudart", "version": "12.8.90",
+    "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.8.90-archive.zip",
+    "size": 3037735,
+    "sha256": "4a39058fd8519444a81cfc7ae055d136f48d1a31ffa41ae255b35b2edd61e13b",
+    "dlls": ["cudart64_12.dll"]
+  },
+  {
+    "name": "libcublas", "version": "12.8.4.1",
+    "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-12.8.4.1-archive.zip",
+    "size": 563660944,
+    "sha256": "57a470112cec7e112c95253dde8b3c7184d795dbd92b0bde77a4cb7f8c94c8aa",
+    "dlls": ["cublas64_12.dll", "cublasLt64_12.dll"]
+  },
+  {
+    "name": "libcufft", "version": "11.3.3.83",
+    "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcufft/windows-x86_64/libcufft-windows-x86_64-11.3.3.83-archive.zip",
+    "size": 190568498,
+    "sha256": "cc6e0ba958cf23387b462017a24464c72bd901549046133f3d1ebcc3d7444c90",
+    "dlls": ["cufft64_11.dll"]
+  },
+  {
+    "name": "cudnn", "version": "9.14.0.64",
+    "url": "https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.14.0.64_cuda12-archive.zip",
+    "size": 624633536,
+    "sha256": "27db1cf50f830a1335de991cf1edde43afb4fc65c365dbf013245f1364ec2b12",
+    "dlls": ["cudnn64_9.dll", "cudnn_adv64_9.dll", "cudnn_cnn64_9.dll", "cudnn_engines_precompiled64_9.dll", "cudnn_engines_runtime_compiled64_9.dll", "cudnn_graph64_9.dll", "cudnn_heuristic64_9.dll", "cudnn_ops64_9.dll"]
+  }
+]

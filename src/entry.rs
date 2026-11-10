@@ -79,6 +79,8 @@ enum Mode {
         words: Option<PathBuf>,
     },
     FetchModel,
+    /// 高音質分離の固定版実行部品を、このアプリのdataへ導入します。
+    SetupRuntime,
     Check,
     AlignEnglish {
         audio: PathBuf,
@@ -344,6 +346,10 @@ fn run() -> Result<()> {
         Mode::FetchModel => {
             let _ = model::ensure_weights(&data.join("models"), &Progress::default())?;
             println!("分離モデルの取得と検証が終わりました。");
+        }
+        Mode::SetupRuntime => {
+            let root = crate::runtime::setup_runtime(&data.join("models"), &Progress::default())?;
+            println!("{}", root.display());
         }
         Mode::Convert {
             input,
