@@ -373,6 +373,76 @@ fn ctc_path_checked(
     Ok(path)
 }
 
+#[cfg(any(feature = "ort", test))]
+fn ctc_targets(
+    words: &[String],
+    dictionary: &std::collections::BTreeMap<String, usize>,
+) -> Result<(Vec<usize>, Vec<Option<usize>>)> {
+    let mut target = Vec::new();
+    let mut word_indices = Vec::new();
+    for (index, word) in words.iter().enumerate() {
+        if !target.is_empty() {
+            target.push(dictionary["|"]);
+            // This label separates words, and is not part of either sung word.
+            word_indices.push(None);
+        }
+        for c in word.to_ascii_uppercase().chars() {
+            target.push(
+                *dictionary
+                    .get(&c.to_string())
+                    .context("正本の歌詞に対応しない文字があります。")?,
+            );
+            word_indices.push(Some(index));
+        }
+    }
+    Ok((target, word_indices))
+}
+
+#[cfg(any(feature = "ort", test))]
+fn ctc_word_intervals(
+    words: Vec<String>,
+    target: &[usize],
+    word_indices: &[Option<usize>],
+    probabilities: &[Vec<f64>],
+    times: &[f64],
+    path: &[usize],
+    duration: f64,
+) -> Result<Vec<Word>> {
+    let mut result: Vec<Word> = words
+        .into_iter()
+        .map(|text| Word {
+            text,
+            start: f64::INFINITY,
+            end: 0.0,
+            confidence: 0.0,
+            join_previous: false,
+            line_index: 0,
+        })
+        .collect();
+    let mut counts = vec![0usize; result.len()];
+    for (t, &state) in path.iter().enumerate() {
+        if state % 2 == 0 {
+            continue;
+        }
+        let token = state / 2;
+        let Some(word) = word_indices[token] else {
+            continue;
+        };
+        result[word].start = result[word].start.min(times[t]);
+        result[word].end = times.get(t + 1).copied().unwrap_or(duration);
+        result[word].confidence += probabilities[t][target[token]].exp();
+        counts[word] += 1;
+    }
+    for (word, count) in result.iter_mut().zip(counts) {
+        ensure!(
+            count > 0 && word.start.is_finite(),
+            "合わせられない単語がありました。"
+        );
+        word.confidence /= count as f64;
+    }
+    Ok(result)
+}
+
 #[cfg(feature = "ort")]
 pub fn force_english(
     audio: &Path,
@@ -444,57 +514,17 @@ pub fn force_english(
         })
         .filter(|w| !w.is_empty())
         .collect();
-    let mut target = Vec::new();
-    let mut word_indices = Vec::new();
-    for (index, word) in words.iter().enumerate() {
-        if !target.is_empty() {
-            target.push(dictionary["|"]);
-            word_indices.push(index);
-        }
-        for c in word.to_ascii_uppercase().chars() {
-            target.push(
-                *dictionary
-                    .get(&c.to_string())
-                    .context("正本の歌詞に対応しない文字があります。")?,
-            );
-            word_indices.push(index);
-        }
-    }
+    let (target, word_indices) = ctc_targets(&words, &dictionary)?;
     let path = ctc_path_checked(&probabilities, &target, dictionary["<pad>"], progress)?;
-    let mut result: Vec<Word> = words
-        .into_iter()
-        .map(|text| Word {
-            text,
-            start: f64::INFINITY,
-            end: 0.0,
-            confidence: 0.0,
-            join_previous: false,
-            line_index: 0,
-        })
-        .collect();
-    let mut counts = vec![0usize; result.len()];
-    for (t, &state) in path.iter().enumerate() {
-        if state % 2 == 0 {
-            continue;
-        }
-        let token = state / 2;
-        let word = word_indices[token];
-        result[word].start = result[word].start.min(times[t]);
-        result[word].end = times
-            .get(t + 1)
-            .copied()
-            .unwrap_or(audio.len() as f64 / 16000.0);
-        result[word].confidence += probabilities[t][target[token]].exp();
-        counts[word] += 1;
-    }
-    for (word, count) in result.iter_mut().zip(counts) {
-        ensure!(
-            count > 0 && word.start.is_finite(),
-            "合わせられない単語がありました。"
-        );
-        word.confidence /= count as f64;
-    }
-    Ok(result)
+    ctc_word_intervals(
+        words,
+        &target,
+        &word_indices,
+        &probabilities,
+        &times,
+        &path,
+        audio.len() as f64 / 16000.0,
+    )
 }
 
 #[cfg(not(feature = "ort"))]
@@ -511,6 +541,80 @@ pub fn force_english(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ctc_word_onset_excludes_the_separator_before_the_sung_letter() {
+        // The separator remains a real CTC label, but its frames are not singing.
+        let probabilities = vec![
+            vec![-8.0, -8.0, -0.01, -8.0],
+            vec![-8.0, -0.5, -8.0, -8.0],
+            vec![-8.0, -0.5, -8.0, -8.0],
+            vec![-8.0, -0.5, -8.0, -8.0],
+            vec![-8.0, -0.5, -8.0, -8.0],
+            vec![-8.0, -8.0, -8.0, -0.01],
+        ];
+        let source_words = vec!["A".into(), "B".into()];
+        let dictionary = [
+            ("<pad>".into(), 0),
+            ("|".into(), 1),
+            ("A".into(), 2),
+            ("B".into(), 3),
+        ]
+        .into_iter()
+        .collect();
+        let (target, word_indices) = ctc_targets(&source_words, &dictionary).unwrap();
+        assert_eq!(target, [2, 1, 3]);
+        let path = ctc_path(&probabilities, &target, 0).unwrap();
+        assert_eq!(path, [1, 3, 3, 3, 3, 5]);
+        let words = ctc_word_intervals(
+            source_words,
+            &target,
+            &word_indices,
+            &probabilities,
+            &[0.0, 0.1, 0.5, 0.9, 1.3, 1.7],
+            &path,
+            1.8,
+        )
+        .unwrap();
+        assert_eq!(
+            words[1].start, 1.7,
+            "a word must start at its letter, not at the earlier separator"
+        );
+        assert_eq!((words[0].start, words[0].end), (0.0, 0.1));
+        assert_eq!(words[1].end, 1.8);
+        assert!((words[1].confidence - (-0.01_f64).exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ctc_letter_intervals_keep_blank_gaps_and_the_last_frame_end() {
+        let source_words = vec!["AB".into()];
+        let dictionary = [("<pad>".into(), 0), ("A".into(), 1), ("B".into(), 2)]
+            .into_iter()
+            .collect();
+        let (target, word_indices) = ctc_targets(&source_words, &dictionary).unwrap();
+        let probabilities = vec![
+            vec![-8.0, -0.01, -8.0],
+            vec![-0.01, -8.0, -8.0],
+            vec![-8.0, -8.0, -0.03],
+        ];
+        let path = ctc_path(&probabilities, &target, 0).unwrap();
+        assert_eq!(path, [1, 2, 3]);
+        let words = ctc_word_intervals(
+            source_words,
+            &target,
+            &word_indices,
+            &probabilities,
+            &[0.2, 0.3, 0.4],
+            &path,
+            0.5,
+        )
+        .unwrap();
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "AB");
+        assert_eq!((words[0].start, words[0].end), (0.2, 0.5));
+        let expected = ((-0.01_f64).exp() + (-0.03_f64).exp()) / 2.0;
+        assert!((words[0].confidence - expected).abs() < 1e-12);
+    }
+
     #[test]
     fn provided_lyrics_keep_words_and_strict_positive_timing() {
         let data = serde_json::json!({"transcription":[{"tokens":[{"text":"My","offsets":{"from":100,"to":300},"t_dtw":20},{"text":" universe","offsets":{"from":300,"to":1500},"t_dtw":90}]}]});
