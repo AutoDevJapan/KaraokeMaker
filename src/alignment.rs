@@ -443,6 +443,47 @@ fn ctc_word_intervals(
     Ok(result)
 }
 
+#[cfg(any(feature = "ort", test))]
+fn ctc_align_reference(
+    reference: &str,
+    dictionary: &std::collections::BTreeMap<String, usize>,
+    probabilities: &[Vec<f64>],
+    times: &[f64],
+    duration: f64,
+    progress: &crate::Progress,
+) -> Result<Vec<Word>> {
+    let mut words = Vec::new();
+    let mut source_lines = Vec::new();
+    for (line_index, line) in reference.lines().enumerate() {
+        let source_line = u32::try_from(line_index).context("歌詞の行数が多すぎます。")?;
+        for word in line.split_whitespace() {
+            let word = word
+                .chars()
+                .filter(|c| c.is_ascii_alphabetic() || *c == '\'')
+                .collect::<String>();
+            if !word.is_empty() {
+                words.push(word);
+                source_lines.push(source_line);
+            }
+        }
+    }
+    let (target, word_indices) = ctc_targets(&words, dictionary)?;
+    let path = ctc_path_checked(probabilities, &target, dictionary["<pad>"], progress)?;
+    let mut result = ctc_word_intervals(
+        words,
+        &target,
+        &word_indices,
+        probabilities,
+        times,
+        &path,
+        duration,
+    )?;
+    for (word, source_line) in result.iter_mut().zip(source_lines) {
+        word.line_index = source_line;
+    }
+    Ok(result)
+}
+
 #[cfg(feature = "ort")]
 pub fn force_english(
     audio: &Path,
@@ -505,25 +546,13 @@ pub fn force_english(
             );
         }
     }
-    let words: Vec<String> = reference
-        .split_whitespace()
-        .map(|word| {
-            word.chars()
-                .filter(|c| c.is_ascii_alphabetic() || *c == '\'')
-                .collect::<String>()
-        })
-        .filter(|w| !w.is_empty())
-        .collect();
-    let (target, word_indices) = ctc_targets(&words, &dictionary)?;
-    let path = ctc_path_checked(&probabilities, &target, dictionary["<pad>"], progress)?;
-    ctc_word_intervals(
-        words,
-        &target,
-        &word_indices,
+    ctc_align_reference(
+        reference,
+        &dictionary,
         &probabilities,
         &times,
-        &path,
         audio.len() as f64 / 16000.0,
+        progress,
     )
 }
 
@@ -541,6 +570,114 @@ pub fn force_english(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn english_ctc_preserves_reference_lines_through_lrc_generation() {
+        let dictionary = [
+            ("<pad>".into(), 0),
+            ("|".into(), 1),
+            ("A".into(), 2),
+            ("B".into(), 3),
+        ]
+        .into_iter()
+        .collect();
+        let probabilities = vec![
+            vec![-8.0, -8.0, -0.01, -8.0],
+            vec![-8.0, -0.01, -8.0, -8.0],
+            vec![-8.0, -8.0, -8.0, -0.01],
+        ];
+        for reference in ["A\n\nB", "A\r\n\r\nB"] {
+            let words = ctc_align_reference(
+                reference,
+                &dictionary,
+                &probabilities,
+                &[0.5, 0.6, 0.7],
+                0.8,
+                &crate::Progress::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                words.iter().map(|word| word.line_index).collect::<Vec<_>>(),
+                [0, 2],
+                "CTC must retain original line boundaries, including blank lines"
+            );
+            assert_eq!((words[0].start, words[0].end), (0.5, 0.6));
+            assert_eq!((words[1].start, words[1].end), (0.7, 0.8));
+            let lrc = crate::lyrics::to_lrc(&crate::lyrics::word_cues(&words));
+            let cues = crate::lyrics::parse_lrc(&lrc).unwrap();
+            assert_eq!(
+                cues.iter()
+                    .filter(|cue| !cue.text.is_empty())
+                    .map(|cue| (cue.seconds, cue.text.as_str()))
+                    .collect::<Vec<_>>(),
+                [(0.5, "A"), (0.7, "B")]
+            );
+        }
+        let one_line = ctc_align_reference(
+            "A B",
+            &dictionary,
+            &probabilities,
+            &[0.5, 0.6, 0.7],
+            0.8,
+            &crate::Progress::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::lyrics::word_cues(&one_line)
+                .iter()
+                .filter(|cue| !cue.text.is_empty())
+                .map(|cue| cue.text.as_str())
+                .collect::<Vec<_>>(),
+            ["A B"]
+        );
+    }
+
+    #[test]
+    fn english_ctc_preserves_all42_reference_lines() {
+        let dictionary = [
+            ("<pad>".into(), 0),
+            ("|".into(), 1),
+            ("A".into(), 2),
+            ("B".into(), 3),
+        ]
+        .into_iter()
+        .collect();
+        let mut reference = Vec::new();
+        let mut probabilities = Vec::new();
+        for line in 0..42 {
+            if line > 0 {
+                probabilities.push(vec![-8.0, -0.01, -8.0, -8.0]);
+            }
+            let label = if line % 2 == 0 { 2 } else { 3 };
+            reference.push(if label == 2 { "A" } else { "B" });
+            let mut row = vec![-8.0; 4];
+            row[label] = -0.01;
+            probabilities.push(row);
+        }
+        let times: Vec<f64> = (0..probabilities.len()).map(|n| n as f64 * 0.1).collect();
+        let words = ctc_align_reference(
+            &reference.join("\n"),
+            &dictionary,
+            &probabilities,
+            &times,
+            probabilities.len() as f64 * 0.1,
+            &crate::Progress::default(),
+        )
+        .unwrap();
+        assert_eq!(words.len(), 42);
+        for (line, word) in words.iter().enumerate() {
+            assert_eq!(word.line_index as usize, line);
+        }
+        let lrc = crate::lyrics::to_lrc(&crate::lyrics::word_cues(&words));
+        assert_eq!(
+            crate::lyrics::parse_lrc(&lrc)
+                .unwrap()
+                .iter()
+                .filter(|cue| !cue.text.is_empty())
+                .count(),
+            42
+        );
+    }
+
     #[test]
     fn ctc_word_onset_excludes_the_separator_before_the_sung_letter() {
         // The separator remains a real CTC label, but its frames are not singing.
