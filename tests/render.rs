@@ -46,6 +46,24 @@ fn cli_sample_rate_selection_matches_saved_settings_and_keeps_the_original() {
         assert_eq!(options.sample_rate, rate.parse::<u32>().unwrap());
         let reader = hound::WavReader::open(path.join("karaoke.wav")).unwrap();
         assert_eq!(reader.spec().sample_rate, options.sample_rate);
+        let probe = media::hidden_command(Tools::discover().ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_name,sample_rate",
+                "-of",
+                "json",
+            ])
+            .arg(path.join("karaoke.mp4"))
+            .output()
+            .unwrap();
+        assert!(probe.status.success());
+        let probe: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+        assert_eq!(probe["streams"][0]["codec_name"], "aac");
+        assert_eq!(probe["streams"][0]["sample_rate"], rate);
         assert_eq!(fs::read(&input).unwrap(), before);
     }
     for rate in ["0", "22050", "96000", "48001"] {

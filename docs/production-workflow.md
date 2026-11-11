@@ -97,7 +97,7 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 
 ## 納品物の自動検査
 
-音声の保存レートはCLIの `convert` / `render` で `--sample-rate 44100` または `--sample-rate 48000` を指定する。省略時は48kHz。指定値は `settings.json` と出力WAVに保存し、既存結果の字幕改版でも引き継ぐ。MP4のAACは従来どおり48kHzで、WAVの指定値と混同しない。
+音声の保存レートはCLIの `convert` / `render` で `--sample-rate 44100` または `--sample-rate 48000` を指定する。省略時は48kHz。指定値は `settings.json` と出力WAVに保存し、既存結果の字幕改版でも引き継ぐ。MP4のAACもこの出力音源から作るため、指定した保存レートをffprobeで照合する。
 
 `inspect-delivery` は既存のFFmpeg/ffprobeで形式・長さ・全編の復号・true peakを測り、JSONに各項目の合否とファイルのSHA-256を残す。原本と納品物は変更しない。既存の結果JSONも上書きしない。追加のモデル・課金・Rust依存は不要。
 
