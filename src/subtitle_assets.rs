@@ -145,7 +145,7 @@ fn resolve_files_with(
                 fetch(source, &part, progress)?;
                 ensure!(
                     verified(&part, source.size, &source.sha256)?.is_some(),
-                    "字幕の実行部品のサイズかSHA-256が一致しません：{}",
+                    "取得ファイルのサイズかSHA-256が一致しません：{}",
                     source.name
                 );
                 preserve_invalid(&path)?;
@@ -201,7 +201,8 @@ fn validate_source(source: &Source) -> Result<()> {
             && source.size > 0
             && source.sha256.len() == 64
             && source.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
-        "字幕の実行部品の定義が不正です。"
+        "取得ファイルの定義が不正です：{}",
+        source.name
     );
     Ok(())
 }
@@ -331,13 +332,22 @@ pub(crate) fn verified_file(
     };
     let mut paths =
         resolve_files_with(cache, &[source], progress, &mut |source, path, progress| {
-            download_with_client(&NETWORK, source, path, progress, || {
-                Ok(reqwest::Client::builder()
-                    .timeout(timeout)
-                    .connect_timeout(Duration::from_secs(30))
-                    .read_timeout(Duration::from_secs(30))
-                    .build()?)
-            })
+            progress.set(format!("分離モデルを初回取得しています：{}", source.name));
+            download_to(
+                &NETWORK,
+                &source.name,
+                &source.url,
+                source.size,
+                path,
+                progress,
+                || {
+                    Ok(reqwest::Client::builder()
+                        .timeout(timeout)
+                        .connect_timeout(Duration::from_secs(30))
+                        .read_timeout(Duration::from_secs(30))
+                        .build()?)
+                },
+            )
         })?;
     paths.pop().context("分離モデルの保存先を確認できません。")
 }
@@ -415,7 +425,7 @@ fn download_to(
                 total += bytes.len() as u64;
                 ensure!(
                     total <= expected_size,
-                    "実行部品のサイズが固定値を超えました。"
+                    "取得ファイルのサイズが固定値を超えました：{name}"
                 );
                 file.write_all(&bytes)?;
                 if total / (8 * 1024 * 1024) != (total - bytes.len() as u64) / (8 * 1024 * 1024) {

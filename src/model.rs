@@ -341,6 +341,11 @@ mod tests {
                 "model cancel waited {elapsed:?}; headers={send_headers}"
             );
             assert!(format!("{:#}", result.unwrap_err()).contains("取り消し"));
+            assert!(
+                progress.get().contains("分離モデル"),
+                "current operation: {}",
+                progress.get()
+            );
             assert_eq!(fs::read(original).unwrap(), b"keep damaged original");
             assert!(
                 fs::read_dir(temp.path()).unwrap().all(|entry| !entry
@@ -427,6 +432,12 @@ mod tests {
                     path
                 );
             } else {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains("model.bin"),
+                    "wrong download identity: {error}"
+                );
+                assert!(!error.contains("字幕"), "wrong operation: {error}");
                 assert_eq!(
                     fs::read(temp.path().join("model.bin")).unwrap(),
                     b"keep damaged model"
