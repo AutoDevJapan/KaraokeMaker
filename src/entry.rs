@@ -55,6 +55,9 @@ enum Mode {
         words: Option<PathBuf>,
         #[arg(long)]
         no_subtitles: bool,
+        /// WAV sample rate; choose 44100 or 48000 Hz.
+        #[arg(long, default_value_t = 48000, value_parser = parse_sample_rate)]
+        sample_rate: u32,
     },
     /// 指定した音源に歌詞を付けます（音源分離なし）。
     Render {
@@ -77,6 +80,9 @@ enum Mode {
         background: bool,
         #[arg(long)]
         words: Option<PathBuf>,
+        /// WAV sample rate; choose 44100 or 48000 Hz.
+        #[arg(long, default_value_t = 48000, value_parser = parse_sample_rate)]
+        sample_rate: u32,
     },
     FetchModel,
     /// 高音質分離の固定版実行部品を、このアプリのdataへ導入します。
@@ -114,6 +120,9 @@ enum Mode {
     /// 納品物（動画・WAV・MP3）の形式・長さ・全編復号・true peakを検査し、結果をJSONで残します。
     /// 検査対象は変更しません。不合格があれば終了コード1です。
     InspectDelivery {
+        /// Expected WAV and MP4 audio sample rate; keep the legacy 48000 Hz default.
+        #[arg(long, default_value_t = 48000, value_parser = parse_sample_rate)]
+        sample_rate: u32,
         /// Write a local editable manual-review JSON form (never overwrites).
         #[arg(long, requires = "settings")]
         manual_form: Option<PathBuf>,
@@ -232,6 +241,7 @@ fn run() -> Result<()> {
             );
         }
         Mode::InspectDelivery {
+            sample_rate,
             manual_form,
             manual_review,
             settings,
@@ -258,7 +268,13 @@ fn run() -> Result<()> {
                     .collect();
             let tools = Tools::discover();
             tools.check()?;
-            let mut report = crate::inspect::inspect(&tools, &source, &items, preset)?;
+            let mut report = crate::inspect::inspect_with_sample_rate(
+                &tools,
+                &source,
+                &items,
+                preset,
+                sample_rate,
+            )?;
             report.record_context(settings.as_deref(), delivery_method, volume_adjustment)?;
             if let Some(path) = manual_review {
                 report.read_manual_review(&path)?;
@@ -367,6 +383,7 @@ fn run() -> Result<()> {
             separation,
             words,
             no_subtitles,
+            sample_rate,
         } => {
             fs::create_dir_all(&output)?;
             let dir = output.join(uuid::Uuid::new_v4().to_string());
@@ -385,7 +402,7 @@ fn run() -> Result<()> {
                 template: read_template(template, project.as_deref())?,
                 project,
                 separation,
-                sample_rate: 48000,
+                sample_rate,
                 words: words
                     .map(|p| -> Result<_> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
                     .transpose()?
@@ -417,6 +434,7 @@ fn run() -> Result<()> {
             project,
             background,
             words,
+            sample_rate,
         } => {
             let options = Options {
                 title,
@@ -426,6 +444,7 @@ fn run() -> Result<()> {
                 style: read_style(style)?,
                 template: read_template(template, project.as_deref())?,
                 project,
+                sample_rate,
                 words: words
                     .map(|p| -> Result<_> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
                     .transpose()?
@@ -508,6 +527,14 @@ fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_sample_rate(value: &str) -> std::result::Result<u32, String> {
+    match value {
+        "44100" => Ok(44100),
+        "48000" => Ok(48000),
+        _ => Err("音声は44100または48000Hzを指定してください。".into()),
+    }
 }
 fn read_template(
     path: Option<PathBuf>,

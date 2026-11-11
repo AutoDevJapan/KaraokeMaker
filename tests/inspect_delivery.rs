@@ -419,6 +419,124 @@ fn cli_writes_json_and_exits_nonzero_only_on_failure() {
 }
 
 #[test]
+fn cli_selected_sample_rate_checks_wav_and_aac_without_accepting_the_other_rate() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let source = source(dir);
+    let source_before = fs::read(&source).unwrap();
+    let base_video = good_video(dir);
+    for rate in ["44100", "48000"] {
+        let wave = wav(
+            dir,
+            &format!("selected-{rate}.wav"),
+            "volume=0dB",
+            "pcm_s24le",
+            rate,
+            "2",
+        );
+        let movie = path(dir, &format!("selected-{rate}.mp4"));
+        ffmpeg(&[
+            "-i",
+            base_video.to_str().unwrap(),
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-ar",
+            rate,
+            movie.to_str().unwrap(),
+        ]);
+        let original_wave = fs::read(&wave).unwrap();
+        let original_movie = fs::read(&movie).unwrap();
+        for selected in [
+            Some(rate),
+            Some(if rate == "44100" { "48000" } else { "44100" }),
+            None,
+        ] {
+            let expected = selected.unwrap_or("48000");
+            let report_path = path(
+                dir,
+                &format!(
+                    "actual-{rate}-expected-{}.json",
+                    selected.unwrap_or("default")
+                ),
+            );
+            let mut process = Command::new(env!("CARGO_BIN_EXE_karaoke-maker-cli"));
+            process
+                .arg("--data")
+                .arg(dir.join("data"))
+                .args(["inspect-delivery", "--source"])
+                .arg(&source)
+                .arg("--wav")
+                .arg(&wave)
+                .arg("--video")
+                .arg(&movie)
+                .args(["--preset", "hd", "--output"])
+                .arg(&report_path);
+            if let Some(selected) = selected {
+                process.args(["--sample-rate", selected]);
+            }
+            let result = process.output().unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(if expected == rate { 0 } else { 1 }),
+                "actual={rate} expected={expected}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let json: serde_json::Value =
+                serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+            assert_eq!(
+                json["criteria"]["sample_rate_hz"],
+                expected.parse::<u32>().unwrap()
+            );
+            assert_eq!(
+                json["automatic_result"],
+                if expected == rate { "pass" } else { "fail" }
+            );
+            let failures: Vec<_> = json["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|file| file["checks"].as_array().unwrap())
+                .filter(|check| check["passed"] == false)
+                .collect();
+            if expected == rate {
+                assert!(failures.is_empty());
+            } else {
+                assert_eq!(
+                    failures.len(),
+                    2,
+                    "WAV and AAC must each reject the wrong rate"
+                );
+                assert!(
+                    failures
+                        .iter()
+                        .all(|check| check["id"] == format!("sample_rate_{expected}"))
+                );
+            }
+            assert_eq!(json["manual_review_complete"], false);
+        }
+        assert_eq!(fs::read(&wave).unwrap(), original_wave);
+        assert_eq!(fs::read(&movie).unwrap(), original_movie);
+    }
+    let invalid_report = path(dir, "invalid-rate.json");
+    let invalid = Command::new(env!("CARGO_BIN_EXE_karaoke-maker-cli"))
+        .args(["inspect-delivery", "--source"])
+        .arg(&source)
+        .args(["--sample-rate", "22050", "--output"])
+        .arg(&invalid_report)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(!invalid_report.exists());
+    assert!(
+        inspect::inspect_with_sample_rate(&Tools::discover(), &source, &[], VideoPreset::Hd, 22050)
+            .is_err()
+    );
+    assert_eq!(fs::read(source).unwrap(), source_before);
+}
+
+#[test]
 fn padded_tail_and_missing_audio_are_failures_with_json_and_nonzero_exit() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

@@ -5,6 +5,93 @@ use karaoke_maker::{
 use std::fs;
 
 #[test]
+fn cli_sample_rate_selection_matches_saved_settings_and_keeps_the_original() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("source.wav");
+    let samples = vec![0.02; 44100];
+    media::write_stereo(&input, &samples, &samples).unwrap();
+    let before = fs::read(&input).unwrap();
+    let lyrics = temp.path().join("lyrics.lrc");
+    fs::write(&lyrics, "[00:00.10]sample\n[00:00.80]\n").unwrap();
+    for rate in ["44100", "48000"] {
+        let result = media::hidden_command(env!("CARGO_BIN_EXE_karaoke-maker-cli"))
+            .arg("--data")
+            .arg(temp.path().join("data"))
+            .arg("render")
+            .arg(&input)
+            .arg("--output")
+            .arg(temp.path().join("out"))
+            .arg("--lyrics")
+            .arg(&lyrics)
+            .args([
+                "--title",
+                "sample",
+                "--preset",
+                "hd",
+                "--background",
+                "--sample-rate",
+                rate,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let path = String::from_utf8(result.stdout).unwrap();
+        let path = std::path::Path::new(path.trim());
+        let options: Options =
+            serde_json::from_slice(&fs::read(path.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(options.sample_rate, rate.parse::<u32>().unwrap());
+        let reader = hound::WavReader::open(path.join("karaoke.wav")).unwrap();
+        assert_eq!(reader.spec().sample_rate, options.sample_rate);
+        let probe = media::hidden_command(Tools::discover().ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_name,sample_rate",
+                "-of",
+                "json",
+            ])
+            .arg(path.join("karaoke.mp4"))
+            .output()
+            .unwrap();
+        assert!(probe.status.success());
+        let probe: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+        assert_eq!(probe["streams"][0]["codec_name"], "aac");
+        assert_eq!(probe["streams"][0]["sample_rate"], rate);
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+    for rate in ["0", "22050", "96000", "48001"] {
+        for command in ["convert", "render"] {
+            let out = temp.path().join(format!("invalid-{command}-{rate}"));
+            let mut process = media::hidden_command(env!("CARGO_BIN_EXE_karaoke-maker-cli"));
+            process
+                .arg("--data")
+                .arg(temp.path().join("data"))
+                .arg(command)
+                .arg(&input)
+                .arg("--output")
+                .arg(&out)
+                .args(["--title", "sample", "--sample-rate", rate]);
+            if command == "render" {
+                process.arg("--lyrics").arg(&lyrics);
+            }
+            let result = process.output().unwrap();
+            assert!(!result.status.success());
+            assert!(
+                !out.exists(),
+                "invalid rate must fail before creating output or loading a model"
+            );
+        }
+    }
+}
+
+#[test]
 fn cli_template_measurement_notice_is_visible_and_stdout_remains_a_result_path() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.wav");

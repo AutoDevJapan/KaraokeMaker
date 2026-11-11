@@ -122,8 +122,9 @@ pub struct Report {
 pub struct Criteria {
     pub duration_tolerance_seconds: f64,
     pub true_peak_limit_dbtp: f64,
+    pub sample_rate_hz: u32,
     pub video: String,
-    pub wav: &'static str,
+    pub wav: String,
     pub mp3: &'static str,
 }
 
@@ -279,13 +280,17 @@ fn check(
     });
 }
 
-fn check_audio_format(checks: &mut Vec<Check>, audio: Option<&Value>) {
+fn check_audio_format(checks: &mut Vec<Check>, audio: Option<&Value>, sample_rate: u32) {
     let rate = audio.and_then(|a| number(&a["sample_rate"]));
     check(
         checks,
-        "sample_rate_48000",
-        rate == Some(48000.0),
-        "48000Hz",
+        if sample_rate == 44100 {
+            "sample_rate_44100"
+        } else {
+            "sample_rate_48000"
+        },
+        rate == Some(f64::from(sample_rate)),
+        format!("{sample_rate}Hz"),
         rate.map(|r| format!("{r}Hz"))
             .unwrap_or_else(|| "なし".into()),
     );
@@ -351,6 +356,7 @@ fn inspect_file(
     item: &Deliverable,
     source_duration: f64,
     preset: VideoPreset,
+    sample_rate: u32,
 ) -> Result<FileReport> {
     ensure!(
         item.path.is_file(),
@@ -482,7 +488,7 @@ fn inspect_file(
                         "aac",
                         text(audio, "codec_name"),
                     );
-                    check_audio_format(&mut checks, audio);
+                    check_audio_format(&mut checks, audio, sample_rate);
                     for (id, stream) in [
                         ("video_stream_duration_matches_source", video),
                         ("audio_stream_duration_matches_source", audio),
@@ -515,7 +521,7 @@ fn inspect_file(
                         "pcm_s24le（24bit PCM）",
                         text(audio, "codec_name"),
                     );
-                    check_audio_format(&mut checks, audio);
+                    check_audio_format(&mut checks, audio, sample_rate);
                 }
                 Kind::Mp3 => {
                     check(
@@ -635,6 +641,22 @@ pub fn inspect(
     deliverables: &[Deliverable],
     preset: VideoPreset,
 ) -> Result<Report> {
+    inspect_with_sample_rate(tools, source, deliverables, preset, 48000)
+}
+
+/// Inspect against the operator's requested rate, never the file's observed rate.
+/// `inspect` keeps the existing 48 kHz default for callers without a rate selection.
+pub fn inspect_with_sample_rate(
+    tools: &Tools,
+    source: &Path,
+    deliverables: &[Deliverable],
+    preset: VideoPreset,
+    sample_rate: u32,
+) -> Result<Report> {
+    ensure!(
+        matches!(sample_rate, 44100 | 48000),
+        "音声は44100または48000Hzを指定してください。"
+    );
     ensure!(
         !deliverables.is_empty(),
         "検査する納品物を1つ以上指定してください。"
@@ -662,7 +684,7 @@ pub fn inspect(
     let (source_hash, _) = sha256(&source)?;
     let files = deliverables
         .iter()
-        .map(|item| inspect_file(tools, item, source_probe.duration, preset))
+        .map(|item| inspect_file(tools, item, source_probe.duration, preset, sample_rate))
         .collect::<Result<Vec<_>>>()?;
     let (after, _) = sha256(&source)?;
     ensure!(after == source_hash, "検査中に元音源が変更されました。");
@@ -679,12 +701,14 @@ pub fn inspect(
         criteria: Criteria {
             duration_tolerance_seconds: DURATION_TOLERANCE,
             true_peak_limit_dbtp: PEAK_LIMIT_DBTP,
+            sample_rate_hz: sample_rate,
             video: format!(
-                "mp4 / H.264 yuv420p / {}x{} / 30fps / AAC 48kHz stereo / 映像・音声各1本",
+                "mp4 / H.264 yuv420p / {}x{} / 30fps / AAC {}Hz stereo / 映像・音声各1本",
                 preset.dimensions().0,
-                preset.dimensions().1
+                preset.dimensions().1,
+                sample_rate
             ),
-            wav: "WAV PCM 24bit / 48kHz / ステレオ",
+            wav: format!("WAV PCM 24bit / {sample_rate}Hz / ステレオ"),
             mp3: "MP3",
         },
         source: SourceReport {

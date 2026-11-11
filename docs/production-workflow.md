@@ -97,18 +97,20 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 
 ## 納品物の自動検査
 
+音声の保存レートはCLIの `convert` / `render` で `--sample-rate 44100` または `--sample-rate 48000` を指定する。省略時は48kHz。指定値は `settings.json` と出力WAVに保存し、既存結果の字幕改版でも引き継ぐ。MP4のAACもこの出力音源から作るため、指定した保存レートをffprobeで照合する。
+
 `inspect-delivery` は既存のFFmpeg/ffprobeで形式・長さ・全編の復号・true peakを測り、JSONに各項目の合否とファイルのSHA-256を残す。原本と納品物は変更しない。既存の結果JSONも上書きしない。追加のモデル・課金・Rust依存は不要。
 
 検品対象は音声1本、動画の映像は1本（カバー画像を除く）。複数の音声が入ったファイルは、最初の音声と別の音声が再生される場合があり、最初の音量を測るだけでは保証できないため不合格にする。1曲の歌入り版と伴奏版は別の動画で納品する。
 
-動画の音声も48kHz・ステレオを検査する。QuickTime MOVをMP4という名前に変えただけのファイルは不合格。動画と音声それぞれの長さが取得できない場合も「不明」の不合格として残し、検査項目を省いて合格にしない。AACのビットレートや字幕・追加データの内容は別途検品する。
+検査するWAVと動画の音声の期待レートは `inspect-delivery --sample-rate 44100` または `48000` で明示する。省略時は従来どおり48kHz。出力時に選んだレートと同じ値を指定し、JSONの `criteria.sample_rate_hz` に残す。実ファイルから期待値を推測したり、`--settings` の記録だけで自動変更したりしない。動画音声はステレオも検査する。QuickTime MOVをMP4という名前に変えただけのファイルは不合格。動画と音声それぞれの長さが取得できない場合も「不明」の不合格として残し、検査項目を省いて合格にしない。AACのビットレートや字幕・追加データの内容は別途検品する。
 
 ```powershell
 karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-lyric.mp4 --wav ./delivery/song-karaoke.wav --mp3 ./delivery/song-karaoke.mp3 --preset 1080p --output ./delivery/inspection-lyric.json
 karaoke-maker-cli inspect-delivery --source ./source/song.wav --video ./delivery/song-karaoke.mp4 --preset 1080p --output ./delivery/inspection-karaoke.json
 ```
 
-動画・WAV・MP3は1つ以上指定する。動画2本は別々に検査する。横4Kは `--preset 4k`、横1440pは `1440p`、縦1080pは `vertical` を使う。元音源との差は0.25秒未満、動画はH.264/yuv420p・指定寸法・30fps・AAC、WAVは24bit/48kHz/stereo、MP3は形式、true peakは-1dBTP以下を基準にする。無音・破損・途中で切れた出力も検査する。
+動画・WAV・MP3は1つ以上指定する。動画2本は別々に検査する。横4Kは `--preset 4k`、横1440pは `1440p`、縦1080pは `vertical` を使う。元音源との差は0.25秒未満、動画はH.264/yuv420p・指定寸法・30fps・AAC、WAVは24bit/指定レート/stereo、MP3は形式、true peakは-1dBTP以下を基準にする。無音・破損・途中で切れた出力も検査する。
 
 自動検査の不合格はJSONを残して終了コード1、合格は0。ファイルなし等の入力の誤りではJSONを作らず1になる。JSONの `automatic_result: pass` は形式面の合格に限る。`manual_review_complete` は常にfalseで、受領時の原本ハッシュとの照合、全編試聴、字幕と画面の目視、正本との照合、別プレイヤーの再生、権利と納品対象の確認を未確認として残す。この記録だけで納品可と判断しない。
 
