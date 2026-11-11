@@ -38,8 +38,25 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             if text.starts_with("[_") {
                 continue;
             }
-            let from = token["offsets"]["from"].as_f64().unwrap_or(0.0) / 1000.0;
-            let to = token["offsets"]["to"].as_f64().unwrap_or(from * 1000.0) / 1000.0;
+            let letters: Vec<char> = text
+                .chars()
+                .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+                .collect();
+            if letters.is_empty() {
+                continue;
+            }
+            let from = token["offsets"]["from"]
+                .as_f64()
+                .context("認識した歌詞の開始時刻がありません。")?
+                / 1000.0;
+            let to = token["offsets"]["to"]
+                .as_f64()
+                .context("認識した歌詞の終了時刻がありません。")?
+                / 1000.0;
+            ensure!(
+                from.is_finite() && to.is_finite() && from >= 0.0 && to > from,
+                "認識した歌詞の時刻が不正です。時刻付き歌詞で修正してください。"
+            );
             let dtw = token["t_dtw"]
                 .as_f64()
                 .filter(|&v| v >= 0.0)
@@ -47,10 +64,6 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             let center = dtw
                 .filter(|&point| point >= from && point <= to)
                 .unwrap_or((from + to) / 2.0);
-            let letters: Vec<char> = text
-                .chars()
-                .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
-                .collect();
             for (index, &c) in letters.iter().enumerate() {
                 let span = (to - from).max(0.02);
                 let start = (center - span / 2.0).max(from).max(0.0);
@@ -138,6 +151,15 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             intervals[n].0 = intervals[n].0.max(intervals[n - 1].0 + 0.002);
         }
         intervals[n].1 = intervals[n].1.max(intervals[n].0 + 0.002);
+    }
+    // Different reference lines become separate ASS events. A positive start
+    // order alone would allow those events to overlap while LRC replaces the
+    // preceding line. Do not invent a boundary for an ambiguous recognition.
+    for n in 1..intervals.len() {
+        ensure!(
+            line_indices[n] == line_indices[n - 1] || intervals[n - 1].1 <= intervals[n].0,
+            "認識した歌詞の行が時間的に重複しています。時刻付き歌詞で修正してください。"
+        );
     }
     Ok(chars
         .into_iter()
@@ -765,6 +787,56 @@ mod tests {
         assert!(words.windows(2).all(|w| w[0].start <= w[1].start));
         assert!(reference_to_whisper("ほげほげ", &data).is_err());
     }
+    #[test]
+    fn whisper_reference_rejects_overlapping_lines_and_invalid_token_bounds() {
+        let normal = serde_json::json!({"transcription":[{"tokens":[
+            {"text":"あ","offsets":{"from":1000,"to":1400},"p":0.9},
+            {"text":"い","offsets":{"from":1500,"to":1900},"p":0.9}
+        ]}]});
+        let words = reference_to_whisper("あ\nい", &normal).unwrap();
+        assert_eq!(words.len(), 2);
+        assert_eq!(
+            (words[0].start, words[0].end, words[1].start, words[1].end),
+            (1.0, 1.4, 1.5, 1.9)
+        );
+        let lrc = crate::lyrics::to_lrc(&crate::lyrics::word_cues(&words));
+        let cues = crate::lyrics::parse_lrc(&lrc).unwrap();
+        assert_eq!(
+            cues.iter().map(|cue| cue.seconds).collect::<Vec<_>>(),
+            [1.0, 1.4, 1.5, 1.9]
+        );
+        let mut overlap = normal.clone();
+        overlap["transcription"][0]["tokens"][0]["offsets"]["to"] = serde_json::json!(1700);
+        assert!(
+            reference_to_whisper("あ\nい", &overlap)
+                .unwrap_err()
+                .to_string()
+                .contains("重複"),
+            "different lyric lines must not produce simultaneous ASS events while LRC replaces the first line"
+        );
+        assert!(
+            reference_to_whisper("あい", &overlap).is_ok(),
+            "overlapping token spans inside one displayed line are retained"
+        );
+        for bounds in [
+            serde_json::json!({"from":-100,"to":100}),
+            serde_json::json!({"from":1000,"to":1000}),
+            serde_json::json!({"from":1000,"to":500}),
+            serde_json::json!({"from":1000}),
+            serde_json::json!({"to":1400}),
+        ] {
+            let mut invalid = normal.clone();
+            invalid["transcription"][0]["tokens"][0]["offsets"] = bounds;
+            assert!(
+                reference_to_whisper("あ\nい", &invalid)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("時刻"),
+                "invalid token boundaries must not be invented as positive timing"
+            );
+        }
+    }
+
     #[test]
     fn line_silence_keeps_recognized_start_and_cancel_stops_viterbi() {
         let data = serde_json::json!({"transcription":[{"tokens":[{"text":"あ","offsets":{"from":1000,"to":1200},"t_dtw":110},{"text":"い","offsets":{"from":10000,"to":10200},"t_dtw":1010}]}]});
