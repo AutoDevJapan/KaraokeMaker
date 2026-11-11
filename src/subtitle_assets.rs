@@ -6,8 +6,78 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
     time::Duration,
 };
+
+/// One owned network runtime per app process. The default OS DNS resolver uses
+/// blocking tasks; cancellation must not drop a short-lived runtime and wait for
+/// getaddrinfo. Bound those tasks across retries instead of abandoning a new
+/// thread pool for every file. DNS tasks hold only host names, never cache files.
+struct NetworkRuntime {
+    runtime: Mutex<(Option<tokio::runtime::Runtime>, bool)>,
+}
+
+impl NetworkRuntime {
+    const fn new() -> Self {
+        Self {
+            runtime: Mutex::new((None, false)),
+        }
+    }
+
+    fn handle(&self) -> Result<tokio::runtime::Handle> {
+        let mut state = self
+            .runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("字幕の通信状態を確認できません。"))?;
+        ensure!(!state.1, "字幕の通信処理は終了しています。");
+        if state.0.is_none() {
+            state.0 = Some(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .max_blocking_threads(2)
+                    .thread_name("karaoke-subtitle-network")
+                    .enable_all()
+                    .build()?,
+            );
+        }
+        Ok(state.0.as_ref().unwrap().handle().clone())
+    }
+
+    fn shutdown(&self) {
+        let runtime = if let Ok(mut state) = self.runtime.lock() {
+            state.1 = true;
+            state.0.take()
+        } else {
+            None
+        };
+        // App workers have returned before this call. An OS DNS lookup cannot
+        // be forcibly cancelled; its at-most-two workers may finish afterwards.
+        // They cannot publish files, and app exit never waits indefinitely.
+        if let Some(runtime) = runtime {
+            runtime.shutdown_timeout(Duration::from_millis(100));
+        }
+    }
+}
+
+static NETWORK: NetworkRuntime = NetworkRuntime::new();
+
+pub(crate) fn shutdown() {
+    NETWORK.shutdown();
+}
+
+async fn cancel_pending<T>(
+    future: impl std::future::Future<Output = Result<T>>,
+    progress: &Progress,
+) -> Result<T> {
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => progress.check()?,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct Source {
@@ -233,21 +303,30 @@ fn cleanup(result: Result<()>, temporary: &Path) -> Result<()> {
 }
 
 fn download(source: &Source, destination: &Path, progress: &Progress) -> Result<()> {
+    download_with_client(&NETWORK, source, destination, progress, || {
+        Ok(reqwest::Client::builder()
+            .timeout(Duration::from_secs(1200))
+            .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(30))
+            .build()?)
+    })
+}
+
+fn download_with_client(
+    network: &NetworkRuntime,
+    source: &Source,
+    destination: &Path,
+    progress: &Progress,
+    client: impl FnOnce() -> Result<reqwest::Client>,
+) -> Result<()> {
     validate_source(source)?;
     progress.set(format!(
         "字幕の実行部品を初回準備しています：{}",
         source.name
     ));
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async {
+    network.handle()?.block_on(async {
         let transfer = async {
-            let mut response = reqwest::Client::builder()
-                .timeout(Duration::from_secs(1200))
-                .connect_timeout(Duration::from_secs(30))
-                .read_timeout(Duration::from_secs(30))
-                .build()?
+            let mut response = client()?
                 .get(&source.url)
                 .send()
                 .await?
@@ -269,13 +348,7 @@ fn download(source: &Source, destination: &Path, progress: &Progress) -> Result<
             file.sync_all()?;
             progress.check()
         };
-        tokio::pin!(transfer);
-        loop {
-            tokio::select! {
-                result = &mut transfer => return result,
-                _ = tokio::time::sleep(Duration::from_millis(50)) => progress.check()?,
-            }
-        }
+        cancel_pending(transfer, progress).await
     })
 }
 
@@ -719,6 +792,215 @@ mod tests {
                 "old model and setup.lock only"
             );
         }
+    }
+
+    #[test]
+    fn cancelled_blocking_resolution_releases_call_and_cache_lock_before_resolver_finishes() {
+        use std::{sync::mpsc, time::Instant};
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("model.bin"), b"old").unwrap();
+        let (begun, started) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        let progress = Progress::default();
+        let cancelled = progress.clone();
+        let cancel = std::thread::spawn(move || {
+            started.recv_timeout(Duration::from_secs(3)).unwrap();
+            cancelled
+                .cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let fetch_started = Instant::now();
+        let network = NetworkRuntime::new();
+        let mut blocking = Some((begun, released, done));
+        let result = resolve_files_with(
+            temp.path(),
+            &[source()],
+            &progress,
+            &mut |_, _path, progress| {
+                let (begun, released, done) = blocking.take().unwrap();
+                network.handle()?.block_on(async {
+                    tokio::task::spawn_blocking(move || {
+                        begun.send(()).unwrap();
+                        let _ = released.recv_timeout(Duration::from_millis(1200));
+                        done.send(()).unwrap();
+                    });
+                    cancel_pending(std::future::pending::<Result<()>>(), progress).await
+                })
+            },
+        );
+        cancel.join().unwrap();
+        let elapsed = fetch_started.elapsed();
+        let _ = release.send(());
+        finished.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_millis(600),
+            "cancel waited for blocking resolver: {elapsed:?}"
+        );
+        assert_eq!(fs::read(temp.path().join("model.bin")).unwrap(), b"old");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp.path().join("setup.lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+        network.shutdown();
+    }
+
+    #[test]
+    fn resolver_retries_are_bounded_cancel_or_timeout_release_files_and_shutdown_is_finite() {
+        use std::{
+            net::{IpAddr, Ipv4Addr, SocketAddr},
+            sync::{
+                Arc, Condvar,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Instant,
+        };
+        struct Resolver {
+            gate: Arc<(Mutex<bool>, Condvar)>,
+            entered: Arc<AtomicUsize>,
+            active: Arc<AtomicUsize>,
+        }
+        struct Abort(tokio::task::AbortHandle);
+        impl Drop for Abort {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        impl reqwest::dns::Resolve for Resolver {
+            fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
+                let gate = self.gate.clone();
+                let entered = self.entered.clone();
+                let active = self.active.clone();
+                Box::pin(async move {
+                    let task = tokio::task::spawn_blocking(move || {
+                        entered.fetch_add(1, Ordering::SeqCst);
+                        active.fetch_add(1, Ordering::SeqCst);
+                        let (lock, wake) = &*gate;
+                        let closed = lock.lock().unwrap();
+                        let _ = wake
+                            .wait_timeout_while(closed, Duration::from_secs(5), |open| !*open)
+                            .unwrap();
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9);
+                        Ok::<reqwest::dns::Addrs, Box<dyn std::error::Error + Send + Sync>>(
+                            Box::new(std::iter::once(address)),
+                        )
+                    });
+                    let _abort = Abort(task.abort_handle());
+                    task.await
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                })
+            }
+        }
+        let network = NetworkRuntime::new();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let entered = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("model.bin"), b"old").unwrap();
+        for attempt in 0..5 {
+            let progress = Progress::default();
+            let cancelled = progress.clone();
+            let cancel = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(70));
+                cancelled.cancelled.store(true, Ordering::Relaxed);
+            });
+            let mut source = source();
+            source.url = "http://cancelled-dns.invalid/model".into();
+            let resolver = Arc::new(Resolver {
+                gate: gate.clone(),
+                entered: entered.clone(),
+                active: active.clone(),
+            });
+            let start = Instant::now();
+            let result = resolve_files_with(
+                temp.path(),
+                &[source],
+                &progress,
+                &mut |source, path, progress| {
+                    download_with_client(&network, source, path, progress, || {
+                        Ok(reqwest::Client::builder()
+                            .no_proxy()
+                            .dns_resolver(resolver.clone())
+                            .timeout(Duration::from_secs(2))
+                            .build()?)
+                    })
+                },
+            );
+            cancel.join().unwrap();
+            assert!(result.is_err());
+            assert!(
+                start.elapsed() < Duration::from_millis(700),
+                "cancel attempt{attempt} waited for resolver"
+            );
+            assert!(active.load(Ordering::SeqCst) <= 2);
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+            let lock = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(temp.path().join("setup.lock"))
+                .unwrap();
+            lock.try_lock().unwrap();
+        }
+        assert_eq!(
+            entered.load(Ordering::SeqCst),
+            2,
+            "retries must not spawn unbounded DNS workers"
+        );
+        // Both DNS workers still run. Timeout and app shutdown must remain finite.
+        let mut source = source();
+        source.url = "http://timeout-dns.invalid/model".into();
+        let resolver = Arc::new(Resolver {
+            gate: gate.clone(),
+            entered: entered.clone(),
+            active: active.clone(),
+        });
+        let start = Instant::now();
+        let result = resolve_files_with(
+            temp.path(),
+            &[source],
+            &Progress::default(),
+            &mut |source, path, progress| {
+                download_with_client(&network, source, path, progress, || {
+                    Ok(reqwest::Client::builder()
+                        .no_proxy()
+                        .dns_resolver(resolver.clone())
+                        .timeout(Duration::from_millis(80))
+                        .build()?)
+                })
+            },
+        );
+        assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_millis(700));
+        let start = Instant::now();
+        network.shutdown();
+        assert!(start.elapsed() < Duration::from_millis(600));
+        assert!(
+            network.handle().is_err(),
+            "shutdown must not recreate the runtime"
+        );
+        assert_eq!(
+            active.load(Ordering::SeqCst),
+            2,
+            "remaining DNS is distinct from completed cancellation"
+        );
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while active.load(Ordering::SeqCst) != 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            entered.load(Ordering::SeqCst),
+            2,
+            "cancelled queued DNS must never run afterwards"
+        );
+        assert_eq!(fs::read(temp.path().join("model.bin")).unwrap(), b"old");
     }
 
     #[test]
