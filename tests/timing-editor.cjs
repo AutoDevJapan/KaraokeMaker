@@ -210,6 +210,7 @@ test('line selection, submit, undo, normal playback and edit cancel pending audi
       if (action === 'save') await nodes.get('.timing-save').fire('submit');
       if (action === 'undo') await nodes.get('[data-undo]').fire('click');
       if (action === 'play') await nodes.get('[data-play]').fire('click');
+      if (action === 'play') assert.equal(video.paused, true, 'pause must not restart an active audition');
       if (action.endsWith('edit')) {
         nodes.get('[name="line-start"]').value = action === 'edit' ? '0.30' : '4.99';
         await nodes.get('[name="line-start"]').fire('change');
@@ -281,6 +282,30 @@ test('server undo is requested only after local edits are undone', async t => {
   assert.equal(nodes.get('.timing-undo').submitted, undefined);
   await nodes.get('[data-undo]').fire('click');
   assert.equal(nodes.get('.timing-undo').submitted, true);
+});
+
+test('undo of a rejected input restores the current row without consuming saved history', async t => {
+  const { nodes, root } = domFixture(t);
+  await mount(root);
+  const start = nodes.get('[name="line-start"]');
+  start.value = '4.99'; await start.fire('change');
+  assert.equal(nodes.get('[role="alert"]').hidden, false);
+  await nodes.get('[data-undo]').fire('click');
+  assert.equal(nodes.get('.timing-undo').submitted, undefined);
+  assert.equal(start.value, '00:00.20');
+  assert.equal(nodes.get('[role="alert"]').hidden, true);
+  await nodes.get('[data-undo]').fire('click');
+  assert.equal(nodes.get('.timing-undo').submitted, true, 'saved undo remains available after input restoration');
+});
+
+test('a rejected input can also be restored when no saved or local undo exists', async t => {
+  const { nodes, root } = domFixture(t, { ...initial(), can_undo: false });
+  await mount(root);
+  nodes.get('[name="line-start"]').value = '4.99'; await nodes.get('[name="line-start"]').fire('change');
+  assert.equal(nodes.get('[data-undo]').disabled, false);
+  await nodes.get('[data-undo]').fire('click');
+  assert.equal(nodes.get('[name="line-start"]').value, '00:00.20');
+  assert.equal(nodes.get('.timing-undo').submitted, undefined);
 });
 
 test('failed loading leaves editing disabled without silently replacing history', async t => {

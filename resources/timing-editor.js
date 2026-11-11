@@ -173,6 +173,7 @@
         invalid = false; displayError(null); refresh(); return true;
       } catch (error) {
         invalid = true; displayError(error); save.disabled = true;
+        undo.disabled = false;
         start.setAttribute('aria-invalid', 'true'); end.setAttribute('aria-invalid', 'true'); return false;
       }
     }
@@ -184,8 +185,9 @@
     find('[data-use-playhead]').addEventListener('click', () => edit((a, b) => [Math.round(video.currentTime * 100), b]));
     seek.addEventListener('input', () => { stopAudition(); video.currentTime = Number(seek.value); time(); });
     play.addEventListener('click', async () => {
+      const playing = !video.paused;
       stopAudition();
-      if (!video.paused) video.pause();
+      if (playing) video.pause();
       else try { await video.play(); } catch (error) { displayError(error); }
     });
     find('[data-audition]').addEventListener('click', async () => {
@@ -201,7 +203,8 @@
     for (const event of ['timeupdate', 'play', 'pause', 'seeked']) video.addEventListener(event, time);
     undo.addEventListener('click', () => {
       if (!editor || submitting) return;
-      stopAudition(); video.pause(); invalid = false; displayError(null);
+      stopAudition(); video.pause(); displayError(null);
+      if (invalid) { invalid = false; refresh(); return; }
       if (editor.undo()) refresh();
       else if (savedUndo) { submitting = true; find('.timing-undo').requestSubmit(); }
     });
