@@ -863,6 +863,20 @@ fn publish_residual(temporary: &Path, destination: &Path) -> Result<()> {
     );
     drop(reader);
     // Non-replacing publication also rejects a destination created after the precheck.
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{Win32::Storage::FileSystem::MoveFileW, core::PCWSTR};
+        let source: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        // MoveFileW does not replace an existing target and works on exFAT too.
+        unsafe { MoveFileW(PCWSTR(source.as_ptr()), PCWSTR(target.as_ptr())) }?;
+    }
+    #[cfg(not(windows))]
     fs::hard_link(temporary, destination)?;
     Ok(())
 }
@@ -1153,5 +1167,33 @@ mod residual_tests {
                 .to_string_lossy()
                 .starts_with("residual-")
         }));
+    }
+
+    #[test]
+    fn residual_concurrent_publication_has_one_winner_without_overwrite() {
+        use std::sync::{Arc, Barrier};
+        let temp = tempfile::tempdir().unwrap();
+        let source_a = temp.path().join("a.wav");
+        let source_b = temp.path().join("b.wav");
+        let destination = temp.path().join("destination.wav");
+        wave(&source_a, 48000, 0.1, 0.25, -0.25);
+        wave(&source_b, 48000, 0.1, 0.5, -0.5);
+        let a = fs::read(&source_a).unwrap();
+        let b = fs::read(&source_b).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let one = scope.spawn(|| {
+                barrier.wait();
+                publish_residual(&source_a, &destination).is_ok()
+            });
+            let two = scope.spawn(|| {
+                barrier.wait();
+                publish_residual(&source_b, &destination).is_ok()
+            });
+            [one.join().unwrap(), two.join().unwrap()]
+        });
+        assert_eq!(results.into_iter().filter(|success| *success).count(), 1);
+        let output = fs::read(&destination).unwrap();
+        assert!(output == a || output == b);
     }
 }
