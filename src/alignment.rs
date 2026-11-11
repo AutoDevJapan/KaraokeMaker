@@ -45,18 +45,15 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             if letters.is_empty() {
                 continue;
             }
-            let from = token["offsets"]["from"]
-                .as_f64()
-                .context("認識した歌詞の開始時刻がありません。")?
-                / 1000.0;
-            let to = token["offsets"]["to"]
-                .as_f64()
-                .context("認識した歌詞の終了時刻がありません。")?
-                / 1000.0;
-            ensure!(
-                from.is_finite() && to.is_finite() && from >= 0.0 && to > from,
-                "認識した歌詞の時刻が不正です。時刻付き歌詞で修正してください。"
-            );
+            let from = token["offsets"]["from"].as_f64().unwrap_or(f64::NAN) / 1000.0;
+            let to = token["offsets"]["to"].as_f64().unwrap_or(f64::NAN) / 1000.0;
+            if !from.is_finite() || !to.is_finite() || from < 0.0 || to <= from {
+                // Keep the text correspondence, but no invented positive timing.
+                // Whisper can emit zero-length extra tokens that the reference
+                // does not use. Only adopting such a token makes timing invalid.
+                timed.extend(letters.into_iter().map(|c| (c, f64::NAN, f64::NAN)));
+                continue;
+            }
             let dtw = token["t_dtw"]
                 .as_f64()
                 .filter(|&v| v >= 0.0)
@@ -82,17 +79,25 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         "歌詞と認識結果が空か長すぎます。"
     );
     let columns = timed.len() + 1;
+    // Maximize text correspondence first, then prefer real timing over an
+    // otherwise equivalent match to an extra zero-length token.
+    let match_weight = chars.len() as u32 + 1;
     let mut score = vec![0u32; (chars.len() + 1) * columns];
     for i in 1..=chars.len() {
         for j in 1..=timed.len() {
-            score[i * columns + j] = if chars[i - 1]
+            let matched = if chars[i - 1]
                 .to_lowercase()
                 .eq(timed[j - 1].0.to_lowercase())
             {
-                score[(i - 1) * columns + j - 1] + 1
+                score[(i - 1) * columns + j - 1]
+                    + match_weight
+                    + u32::from(timed[j - 1].1.is_finite())
             } else {
-                score[(i - 1) * columns + j].max(score[i * columns + j - 1])
+                0
             };
+            score[i * columns + j] = matched
+                .max(score[(i - 1) * columns + j])
+                .max(score[i * columns + j - 1]);
         }
     }
     let mut mapped = vec![None; chars.len()];
@@ -101,6 +106,10 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         if chars[i - 1]
             .to_lowercase()
             .eq(timed[j - 1].0.to_lowercase())
+            && score[i * columns + j]
+                == score[(i - 1) * columns + j - 1]
+                    + match_weight
+                    + u32::from(timed[j - 1].1.is_finite())
         {
             mapped[i - 1] = Some(j - 1);
             i -= 1;
@@ -115,6 +124,13 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
     ensure!(
         matches as f64 / chars.len() as f64 > 0.3,
         "歌詞と歌声の対応が少なすぎます。時刻付き歌詞で修正してください。"
+    );
+    ensure!(
+        mapped.iter().flatten().all(|&k| timed[k].1.is_finite()
+            && timed[k].2.is_finite()
+            && timed[k].1 >= 0.0
+            && timed[k].2 > timed[k].1),
+        "認識した歌詞の時刻が不正です。時刻付き歌詞で修正してください。"
     );
     let mut intervals = vec![(0.0f64, 0.0f64); chars.len()];
     for n in 0..chars.len() {
@@ -152,16 +168,7 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         }
         intervals[n].1 = intervals[n].1.max(intervals[n].0 + 0.002);
     }
-    // Different reference lines become separate ASS events. A positive start
-    // order alone would allow those events to overlap while LRC replaces the
-    // preceding line. Do not invent a boundary for an ambiguous recognition.
-    for n in 1..intervals.len() {
-        ensure!(
-            line_indices[n] == line_indices[n - 1] || intervals[n - 1].1 <= intervals[n].0,
-            "認識した歌詞の行が時間的に重複しています。時刻付き歌詞で修正してください。"
-        );
-    }
-    Ok(chars
+    let words: Vec<Word> = chars
         .into_iter()
         .enumerate()
         .map(|(n, c)| Word {
@@ -172,7 +179,18 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             join_previous: joins[n],
             line_index: line_indices[n],
         })
-        .collect())
+        .collect();
+    // Use the same display groups as ASS and LRC, including splits inside long
+    // reference lines. Every token in the group contributes to its end time.
+    let mut previous_end = 0.0;
+    for group in crate::lyrics::word_groups(&words) {
+        ensure!(
+            words[group.start].start >= previous_end,
+            "認識した歌詞の表示区間が時間的に重複しています。時刻付き歌詞で修正してください。"
+        );
+        previous_end = words[group].iter().map(|word| word.end).fold(0.0, f64::max);
+    }
+    Ok(words)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -835,6 +853,64 @@ mod tests {
                 "invalid token boundaries must not be invented as positive timing"
             );
         }
+    }
+
+    #[test]
+    fn unused_zero_length_token_does_not_discard_valid_reference_timing() {
+        let normal = serde_json::json!({"transcription":[{"tokens":[
+            {"text":"あ","offsets":{"from":1000,"to":1400}},
+            {"text":"い","offsets":{"from":1500,"to":1900}}
+        ]}]});
+        let expected = reference_to_whisper("あ\nい", &normal).unwrap();
+        let mut with_extra = normal;
+        with_extra["transcription"][0]["tokens"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"text":"ん","offsets":{"from":2000,"to":2000}}));
+        let actual = reference_to_whisper("あ\nい", &with_extra).unwrap();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        with_extra["transcription"][0]["tokens"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"text":"い","offsets":{"from":2000,"to":2000}}));
+        let preferred = reference_to_whisper("あ\nい", &with_extra).unwrap();
+        assert_eq!(
+            (preferred[1].start, preferred[1].end),
+            (1.5, 1.9),
+            "valid full correspondence wins over a duplicate zero-length token"
+        );
+    }
+
+    #[test]
+    fn split_reference_line_rejects_overlapping_display_intervals() {
+        let data = serde_json::json!({"transcription":[{"tokens":[
+            {"text":"あ","offsets":{"from":1000,"to":1500}},
+            {"text":"い","offsets":{"from":3000,"to":7000}},
+            {"text":"う","offsets":{"from":5000,"to":5500}},
+            {"text":"え","offsets":{"from":6000,"to":6500}}
+        ]}]});
+        assert!(
+            reference_to_whisper("あいう\nえ", &data).is_err(),
+            "4-second display split must not let the long preceding token overlap a later event"
+        );
+        let characters: String = (0..37)
+            .map(|n| char::from_u32(0x3041 + n).unwrap())
+            .collect();
+        let char_tokens: Vec<_> = characters.chars().enumerate().map(|(n,c)|{
+            let start = 1000+n*10;
+            serde_json::json!({"text":c.to_string(),"offsets":{"from":start,"to":if n==0 { 3000 } else { start+5 }}})
+        }).collect();
+        assert!(
+            reference_to_whisper(
+                &characters,
+                &serde_json::json!({"transcription":[{"tokens":char_tokens}]})
+            )
+            .is_err(),
+            "character-limit split must use the full preceding interval end"
+        );
     }
 
     #[test]

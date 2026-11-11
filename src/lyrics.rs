@@ -233,20 +233,19 @@ pub fn make_ass_words(
         let (left, right, _, _) = layout_margins(preset, template);
         width.saturating_sub(left + right)
     });
-    let mut first = 0;
-    while first < words.len() {
-        let mut last = first + 1;
-        let mut count = words[first].text.chars().count();
-        while last < words.len()
-            && words[last].line_index == words[first].line_index
-            && words[last].start - words[first].start < 4.0
-            && count + words[last].text.chars().count() < 36
-        {
-            count += words[last].text.chars().count();
-            last += 1;
-        }
+    let mut previous_end = 0.0;
+    for group in word_groups(words) {
+        let (first, last) = (group.start, group.end);
+        ensure!(
+            words[first].start >= previous_end,
+            "単語の表示区間が重複しています。"
+        );
         let start = words[first].start / tempo;
-        let end = words[last - 1].end.min(duration) / tempo;
+        previous_end = words[first..last]
+            .iter()
+            .map(|word| word.end)
+            .fold(0.0, f64::max);
+        let end = previous_end.min(duration) / tempo;
         let mut text = String::new();
         let mut rendered_line = String::new();
         let mut displayed_lines = Vec::new();
@@ -318,15 +317,19 @@ pub fn make_ass_words(
             stamp(start),
             stamp(end)
         ));
-        first = last;
     }
     Ok(ass)
 }
 
-pub fn word_cues(words: &[crate::alignment::Word]) -> Vec<Cue> {
-    let mut cues = Vec::new();
+/// One grouping contract for line/4-second/36-character display boundaries.
+pub(crate) fn word_groups(
+    words: &[crate::alignment::Word],
+) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
     let mut first = 0;
-    while first < words.len() {
+    std::iter::from_fn(move || {
+        if first >= words.len() {
+            return None;
+        }
         let mut last = first + 1;
         let mut length = words[first].text.chars().count();
         while last < words.len()
@@ -337,6 +340,20 @@ pub fn word_cues(words: &[crate::alignment::Word]) -> Vec<Cue> {
             length += words[last].text.chars().count();
             last += 1;
         }
+        let group = first..last;
+        first = last;
+        Some(group)
+    })
+}
+
+pub fn word_cues(words: &[crate::alignment::Word]) -> Vec<Cue> {
+    let mut cues = Vec::new();
+    for group in word_groups(words) {
+        let (first, last) = (group.start, group.end);
+        let end = words[first..last]
+            .iter()
+            .map(|word| word.end)
+            .fold(0.0, f64::max);
         let text = words[first..last]
             .iter()
             .enumerate()
@@ -356,16 +373,12 @@ pub fn word_cues(words: &[crate::alignment::Word]) -> Vec<Cue> {
             seconds: words[first].start,
             text,
         });
-        if words
-            .get(last)
-            .is_none_or(|w| w.start > words[last - 1].end + 0.01)
-        {
+        if words.get(last).is_none_or(|w| w.start > end + 0.01) {
             cues.push(Cue {
-                seconds: words[last - 1].end,
+                seconds: end,
                 text: String::new(),
             });
         }
-        first = last;
     }
     cues
 }
@@ -1234,6 +1247,60 @@ mod tests {
             assert!(parse_lrc(invalid).is_err(), "{invalid}");
         }
     }
+    #[test]
+    fn overlapping_tokens_keep_the_full_display_end_and_split_groups_are_rejected() {
+        let word = |text: &str, start, end| crate::alignment::Word {
+            text: text.into(),
+            start,
+            end,
+            confidence: 1.0,
+            join_previous: true,
+            line_index: 0,
+        };
+        let same_group = [word("あ", 1.0, 4.0), word("い", 2.0, 2.5)];
+        let cues = word_cues(&same_group);
+        assert_eq!(cues.len(), 2);
+        assert_eq!((cues[0].seconds, cues[1].seconds), (1.0, 4.0));
+        let ass = make_ass_words(
+            "試験",
+            &same_group,
+            10.0,
+            1.0,
+            VideoPreset::Hd,
+            &VisualStyle::default(),
+            None,
+        )
+        .unwrap();
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:04.00,Lyrics"));
+        let mut split = same_group.to_vec();
+        split.push(word("う", 5.0, 5.5));
+        assert!(
+            make_ass_words(
+                "試験",
+                &split,
+                10.0,
+                1.0,
+                VideoPreset::Hd,
+                &VisualStyle::default(),
+                None
+            )
+            .is_ok()
+        );
+        split[0].end = 7.0;
+        assert!(
+            make_ass_words(
+                "試験",
+                &split,
+                10.0,
+                1.0,
+                VideoPreset::Hd,
+                &VisualStyle::default(),
+                None
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn ass_uses_output_timeline_and_neutralizes_override_tags() {
         let ass = make_ass(
