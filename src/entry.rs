@@ -120,6 +120,9 @@ enum Mode {
     /// 納品物（動画・WAV・MP3）の形式・長さ・全編復号・true peakを検査し、結果をJSONで残します。
     /// 検査対象は変更しません。不合格があれば終了コード1です。
     InspectDelivery {
+        /// Expected WAV and MP4 audio sample rate; keep the legacy 48000 Hz default.
+        #[arg(long, default_value_t = 48000, value_parser = parse_sample_rate)]
+        sample_rate: u32,
         /// Write a local editable manual-review JSON form (never overwrites).
         #[arg(long, requires = "settings")]
         manual_form: Option<PathBuf>,
@@ -238,6 +241,7 @@ fn run() -> Result<()> {
             );
         }
         Mode::InspectDelivery {
+            sample_rate,
             manual_form,
             manual_review,
             settings,
@@ -264,7 +268,13 @@ fn run() -> Result<()> {
                     .collect();
             let tools = Tools::discover();
             tools.check()?;
-            let mut report = crate::inspect::inspect(&tools, &source, &items, preset)?;
+            let mut report = crate::inspect::inspect_with_sample_rate(
+                &tools,
+                &source,
+                &items,
+                preset,
+                sample_rate,
+            )?;
             report.record_context(settings.as_deref(), delivery_method, volume_adjustment)?;
             if let Some(path) = manual_review {
                 report.read_manual_review(&path)?;
