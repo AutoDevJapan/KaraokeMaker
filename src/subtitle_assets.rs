@@ -238,33 +238,45 @@ fn download(source: &Source, destination: &Path, progress: &Progress) -> Result<
         "字幕の実行部品を初回準備しています：{}",
         source.name
     ));
-    let mut response = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(1200))
-        .build()?
-        .get(&source.url)
-        .send()?
-        .error_for_status()?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)?;
-    let mut bytes = [0u8; 65536];
-    let mut total = 0;
-    loop {
-        progress.check()?;
-        let count = response.read(&mut bytes)?;
-        if count == 0 {
-            break;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let transfer = async {
+            let mut response = reqwest::Client::builder()
+                .timeout(Duration::from_secs(1200))
+                .connect_timeout(Duration::from_secs(30))
+                .read_timeout(Duration::from_secs(30))
+                .build()?
+                .get(&source.url)
+                .send()
+                .await?
+                .error_for_status()?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)?;
+            let mut total = 0;
+            while let Some(bytes) = response.chunk().await? {
+                progress.check()?;
+                total += bytes.len() as u64;
+                ensure!(
+                    total <= source.size,
+                    "字幕の実行部品のサイズが固定値を超えました。"
+                );
+                file.write_all(&bytes)?;
+            }
+            file.sync_all()?;
+            progress.check()
+        };
+        tokio::pin!(transfer);
+        loop {
+            tokio::select! {
+                result = &mut transfer => return result,
+                _ = tokio::time::sleep(Duration::from_millis(50)) => progress.check()?,
+            }
         }
-        total += count as u64;
-        ensure!(
-            total <= source.size,
-            "字幕の実行部品のサイズが固定値を超えました。"
-        );
-        file.write_all(&bytes[..count])?;
-    }
-    file.sync_all()?;
-    Ok(())
+    })
 }
 
 fn sdk_valid(root: &Path, sdk: &Sdk) -> Result<bool> {
@@ -647,5 +659,153 @@ mod tests {
             validate_source(source).unwrap();
         }
         assert_eq!(manifest.whisper_sdk.files.len(), 13);
+    }
+
+    #[test]
+    fn stalled_headers_or_body_cancel_promptly_and_preserve_existing_cache() {
+        use std::{net::TcpListener, sync::mpsc, time::Instant};
+        for send_headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (ready, received) = mpsc::channel();
+            let (release, wait_release) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0u8; 2048];
+                assert!(stream.read(&mut request).unwrap() > 0);
+                if send_headers {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    stream.flush().unwrap();
+                }
+                ready.send(()).unwrap();
+                let _ = wait_release.recv_timeout(Duration::from_secs(4));
+            });
+            let temp = tempfile::tempdir().unwrap();
+            fs::write(temp.path().join("model.bin"), b"old").unwrap();
+            let mut source = source();
+            source.url = format!("http://{address}/model");
+            let progress = Progress::default();
+            let cancelled = progress.clone();
+            let cancel = std::thread::spawn(move || {
+                received.recv_timeout(Duration::from_secs(5)).unwrap();
+                let start = Instant::now();
+                cancelled
+                    .cancelled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                start
+            });
+            let result = resolve_files_with(temp.path(), &[source], &progress, &mut download);
+            let cancel_at = cancel.join().unwrap();
+            let elapsed = cancel_at.elapsed();
+            let _ = release.send(());
+            server.join().unwrap();
+            assert!(result.is_err());
+            assert!(
+                elapsed < Duration::from_secs(2),
+                "cancel waited {elapsed:?} with headers={send_headers}"
+            );
+            assert!(format!("{:#}", result.unwrap_err()).contains("取り消し"));
+            assert_eq!(fs::read(temp.path().join("model.bin")).unwrap(), b"old");
+            assert_eq!(
+                fs::read_dir(temp.path()).unwrap().count(),
+                2,
+                "old model and setup.lock only"
+            );
+        }
+    }
+
+    #[test]
+    fn network_download_accepts_exact_bytes_and_rejects_truncation_or_excess() {
+        use std::net::TcpListener;
+        for body in [b"model".as_slice(), b"bad".as_slice(), b"sixsix".as_slice()] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = body.to_vec();
+            let should_pass = body == b"model";
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0u8; 2048];
+                assert!(socket.read(&mut request).unwrap() > 0);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                socket.write_all(&body).unwrap();
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let mut source = source();
+            source.url = format!("http://{address}/model");
+            let result =
+                resolve_files_with(temp.path(), &[source], &Progress::default(), &mut download);
+            server.join().unwrap();
+            assert_eq!(result.is_ok(), should_pass);
+            if should_pass {
+                assert_eq!(fs::read(temp.path().join("model.bin")).unwrap(), b"model");
+            } else {
+                assert!(!temp.path().join("model.bin").exists());
+            }
+            assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".part")
+            }));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly supplied official ZIP; never downloads or starts an executable"]
+    fn official_whisper_sdk_installs_from_verified_local_archive_and_reuses_offline() {
+        let archive = std::env::var_os("KARAOKE_WHISPER_SDK_ARCHIVE")
+            .expect("set KARAOKE_WHISPER_SDK_ARCHIVE to the fixed official v1.9.2 ZIP");
+        let sdk = manifest().unwrap().whisper_sdk;
+        assert!(
+            verified(Path::new(&archive), sdk.archive.size, &sdk.archive.sha256)
+                .unwrap()
+                .is_some()
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let mut fetches = 0;
+        let executable = install_sdk_with(
+            temp.path(),
+            &sdk,
+            &Progress::default(),
+            &mut |_, path, _| {
+                fetches += 1;
+                fs::copy(&archive, path)?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(fetches, 1);
+        assert!(sdk_valid(executable.parent().unwrap(), &sdk).unwrap());
+        assert_eq!(
+            fs::read_dir(executable.parent().unwrap()).unwrap().count(),
+            sdk.files.len()
+        );
+        fs::remove_file(temp.path().join(&sdk.archive.name)).unwrap();
+        assert_eq!(
+            install_sdk_with(
+                temp.path(),
+                &sdk,
+                &Progress::default(),
+                &mut |_, _, _| anyhow::bail!("offline reuse fetched again")
+            )
+            .unwrap(),
+            executable
+        );
     }
 }
