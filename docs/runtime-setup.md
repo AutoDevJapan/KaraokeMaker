@@ -15,6 +15,8 @@
 
 準備中は既存の進捗欄に状況を表示します。中断・失敗した未完了の展開先を使用せず、照合済みの取得アーカイブは再試行で再利用します。導入済みの部品が壊れていた場合は元の内容を別名で保持して導入し直します。導入完了後のアーカイブ削除に失敗した場合は、導入先の `setup-cleanup-warning.txt` と標準エラーへ対象・理由を残します。
 
+通信が停止している場合も取り消しを確認し、未完了の展開先と取得途中ファイルを回収します。大容量ファイル全体の取得期限は20分、接続・応答待ちは30秒です。通信処理は字幕部品と同じ有界runtimeを共有し、取消しのたびに新しいDNSワーカーを増やしません。同期ファイル書込みやOS処理の厳密な応答時間を保証するものではありません。
+
 固定値は `resources/cuda-runtime.json` に記録します。ONNX Runtimeは[NuGetの固定版](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.Gpu.Windows/1.24.4)と公式カタログのSHA-512を照合して取得したアーカイブのSHA-256を固定しています。CUDA Runtime・cuBLAS・cuFFTは[NVIDIA CUDA 12.8.1の再配布メタデータ](https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.8.1.json)、cuDNNは[NVIDIA cuDNN 9.14.0の再配布メタデータ](https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_9.14.0.json)のSHA-256に対応します。各部品の利用条件は同梱された原文を確認してください。
 
 初回準備・起動の成功は、実曲の音質、字幕の±100ms同期、全編試聴・目視の合格を示しません。これらは実曲の受入記録で別に確認します。

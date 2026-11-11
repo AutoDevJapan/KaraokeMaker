@@ -173,43 +173,15 @@ fn installed_valid(root: &Path, expected: &[Package]) -> Result<bool> {
     Ok(true)
 }
 
-#[cfg(feature = "ort")]
+#[cfg(any(feature = "ort", test))]
 fn download(package: &Package, destination: &Path, progress: &Progress) -> Result<()> {
-    let mut response = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(1200))
-        .build()?
-        .get(&package.url)
-        .send()?
-        .error_for_status()?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)?;
-    let mut total = 0u64;
-    let mut buffer = [0u8; 65536];
-    loop {
-        progress.check()?;
-        let count = response.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        total += count as u64;
-        ensure!(
-            total <= package.size,
-            "実行部品のサイズが公式の固定値を超えました。"
-        );
-        file.write_all(&buffer[..count])?;
-        if total / (8 * 1024 * 1024) != (total - count as u64) / (8 * 1024 * 1024) {
-            progress.set(format!(
-                "高音質の実行部品を準備しています：{}（{} / {} MB）",
-                package.name,
-                total / 1_000_000,
-                package.size / 1_000_000
-            ));
-        }
-    }
-    file.sync_all()?;
-    Ok(())
+    crate::subtitle_assets::download_file(
+        &package.name,
+        &package.url,
+        package.size,
+        destination,
+        progress,
+    )
 }
 
 fn extract(
@@ -686,6 +658,157 @@ mod tests {
                     .file_name()
                     .to_string_lossy()
                     .starts_with(".setup-"))
+        );
+    }
+
+    #[test]
+    fn runtime_download_stalled_headers_and_body_cancel_without_waiting_for_network() {
+        use std::{net::TcpListener, sync::mpsc, time::Instant};
+        for send_headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (ready, received) = mpsc::channel();
+            let (release, wait_release) = mpsc::channel();
+            let (mut package, bytes) = fixture();
+            package.url = format!("http://{address}/runtime.zip");
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0u8; 2048];
+                assert!(socket.read(&mut request).unwrap() > 0);
+                if send_headers {
+                    write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        bytes.len()
+                    )
+                    .unwrap();
+                    socket.flush().unwrap();
+                }
+                ready.send(()).unwrap();
+                let _ = wait_release.recv_timeout(Duration::from_secs(3));
+            });
+            let progress = Progress::default();
+            let cancelled = progress.clone();
+            let cancel = std::thread::spawn(move || {
+                received.recv_timeout(Duration::from_secs(5)).unwrap();
+                let at = Instant::now();
+                cancelled
+                    .cancelled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                at
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let models = temp.path().join("data/models");
+            fs::create_dir_all(&models).unwrap();
+            fs::write(models.join("existing.bin"), b"original model").unwrap();
+            let result = install_with(&models, &[package], &progress, &mut download);
+            let cancel_at = cancel.join().unwrap();
+            let elapsed = cancel_at.elapsed();
+            let _ = release.send(());
+            server.join().unwrap();
+            assert!(result.is_err());
+            assert!(
+                elapsed < Duration::from_millis(750),
+                "cancel waited {elapsed:?}; headers={send_headers}"
+            );
+            assert!(format!("{:#}", result.unwrap_err()).contains("取り消し"));
+            assert_eq!(
+                fs::read(models.join("existing.bin")).unwrap(),
+                b"original model"
+            );
+            assert!(!local_root(&models).unwrap().exists());
+            assert!(
+                fs::read_dir(temp.path().join("data/runtime"))
+                    .unwrap()
+                    .all(|entry| !entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".setup-"))
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_network_bytes_are_verified_before_install_and_cancelled_calls_do_not_connect() {
+        use std::net::TcpListener;
+        let (package, exact) = fixture();
+        let mut excessive = exact.clone();
+        excessive.push(0);
+        for body in [exact.clone(), exact[..exact.len() - 1].to_vec(), excessive] {
+            let should_pass = body == exact;
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0u8; 2048];
+                assert!(socket.read(&mut request).unwrap() > 0);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                socket.write_all(&body).unwrap();
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let models = temp.path().join("data/models");
+            let package = Package {
+                url: format!("http://{address}/runtime.zip"),
+                ..package.clone()
+            };
+            let result = install_with(&models, &[package], &Progress::default(), &mut download);
+            server.join().unwrap();
+            assert_eq!(result.is_ok(), should_pass);
+            if should_pass {
+                let root = result.unwrap();
+                assert_eq!(fs::read(root.join("test.dll")).unwrap(), b"fixture binary");
+                assert_eq!(
+                    fs::read(root.join("licenses/test-runtime/official/LICENSE")).unwrap(),
+                    b"Original license bytes\n"
+                );
+            } else {
+                assert!(!local_root(&models).unwrap().exists());
+            }
+            assert!(
+                fs::read_dir(temp.path().join("data/runtime"))
+                    .unwrap()
+                    .all(|entry| !entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".setup-"))
+            );
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let package = Package {
+            url: format!("http://{}/runtime.zip", listener.local_addr().unwrap()),
+            ..package
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("untouched.part");
+        let progress = Progress::default();
+        progress
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            format!(
+                "{:#}",
+                download(&package, &destination, &progress).unwrap_err()
+            )
+            .contains("取り消し")
+        );
+        assert!(!destination.exists());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
         );
     }
 
