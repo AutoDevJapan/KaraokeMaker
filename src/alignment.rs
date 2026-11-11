@@ -168,6 +168,7 @@ pub struct Word {
 pub fn prepare(
     audio: &Path,
     dir: &Path,
+    models: &Path,
     reference: &str,
     duration: f64,
     progress: &crate::Progress,
@@ -184,16 +185,14 @@ pub fn prepare(
     ensure!(status.success(), "時刻合わせ用の音源を作れませんでした。");
     progress.check()?;
     let mut words = if !reference.trim().is_empty() && reference.is_ascii() {
-        force_english(
-            &wave,
-            reference,
-            Path::new("D:/CC/Tools/forced-align/models/model_quantized.onnx"),
-            Path::new("D:/CC/Tools/forced-align/models/vocab.json"),
-            progress,
-        )?
+        let assets = crate::subtitle_assets::ctc(models, progress)?;
+        #[cfg(feature = "ort")]
+        crate::runtime::initialize_for_models(models, progress)?;
+        force_english(&wave, reference, &assets.model, &assets.vocab, progress)?
     } else {
-        let executable = Path::new("D:/CC/Tools/whisper-cpp/v1.9.2/Release/whisper-cli.exe");
-        let model = Path::new("D:/CC/Tools/whisper-cpp/models/ggml-large-v3-turbo-q5_0.bin");
+        let assets = crate::subtitle_assets::whisper(models, progress)?;
+        let executable = &assets.executable;
+        let model = &assets.model;
         ensure!(
             executable.is_file() && model.is_file(),
             "歌詞の自動時刻合わせにはwhisper.cppの導入が必要です。時刻付き歌詞でも作成できます。"
