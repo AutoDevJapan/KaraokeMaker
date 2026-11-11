@@ -80,7 +80,7 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 - `render` で完成音源や提供伴奏を字幕付き動画にし、音源分離なしで修正版を作れる。
 - LRCを原曲時刻で、SRT/ASSを出力時刻で保存できる。空のLRC行で間奏の表示を終えられる。
 
-モデル実行と同期に必要なRust依存を追加し、固定版と条件をdependencies.mdに記録した。画面から解像度を選べ、完成後はLRCと時刻を修正して音源分離なしで背景付き動画を作り直せる。波形や各行のドラッグ編集は今後の項目。自動同期は候補を作る機能で、正確さの確認は必要。
+モデル実行と同期に必要なRust依存を追加し、固定版と条件をdependencies.mdに記録した。画面から解像度を選べ、完成後は再生位置と行の表示区間を見ながら開始・終了を修正し、選択行を試聴できる。保存前の取り消しと保存済み履歴の取り消しを使い、音源分離なしで新しい動画を作る。波形や各行のドラッグ編集は提供していない。自動同期は候補を作る機能で、正確さの確認は必要。
 
 1440p/4K指定時の形式検品では上の1080p解像度の条件を、それぞれ2560×1440/3840×2160へ置き換える。品質と容量に応じた設定・書き出しの測定結果は [4k-validation.md](4k-validation.md) を参照する。歌入り・伴奏の両方で指定解像度を確認する。
 
@@ -89,7 +89,7 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 | 不足 | 今の対応 | Issue |
 | --- | --- | --- |
 | 曲ごとの分離品質を判定した商用実績 | 購入前の比較試聴。提供伴奏優先、不合格は受注しない | [音源分離の評価](https://github.com/AutoDevJapan/KaraokeMaker/issues/2) |
-| 開始・終了を波形を見て直す編集画面 | 完成画面のLRC修正と再出力を使用し全編確認 | [歌詞編集画面](https://github.com/AutoDevJapan/KaraokeMaker/issues/3) |
+| 実曲全編の歌詞時刻と操作時間の検証 | 再生位置・行時刻・試聴・取り消しと再出力で確認する。実曲の±100ms精度や手作業15分目標は別に測定 | [歌詞編集画面](https://github.com/AutoDevJapan/KaraokeMaker/issues/3) |
 | 背景画像・ロゴ・配置を保存するテンプレート | 色・フォント・改行を案件別に指定。許可済み背景はFFmpegで準備 | [動画テンプレート](https://github.com/AutoDevJapan/KaraokeMaker/issues/4) |
 | 48kHz・納品検査の自動記録 | 48kHz標準、ピーク測定は実装済み。試聴・目視と商用基準は手動確認 | [納品の形式と検品](https://github.com/AutoDevJapan/KaraokeMaker/issues/5) |
 

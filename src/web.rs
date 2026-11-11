@@ -199,6 +199,8 @@ pub fn router(app: App) -> Router {
             }),
         )
         .route("/", get(home))
+        .route("/assets/timing-editor.js", get(timing_editor_script))
+        .route("/assets/timing-editor.css", get(timing_editor_styles))
         .route("/jobs", post(upload))
         .route("/jobs/{id}", get(job_page))
         .route("/jobs/{id}/timing", get(timing))
@@ -214,6 +216,20 @@ pub fn router(app: App) -> Router {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 128 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), local_only))
         .with_state(app)
+}
+
+async fn timing_editor_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../resources/timing-editor.js"),
+    )
+}
+
+async fn timing_editor_styles() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../resources/timing-editor.css"),
+    )
 }
 
 async fn local_only(
@@ -506,7 +522,7 @@ async fn job_page(State(app): State<App>, WebPath(id): WebPath<String>) -> Respo
         if !has_lyrics {
             body.push_str("<p class=\"error\">歌詞字幕を確定できていません。下の欄へ時刻付きの歌詞を入れ、動画を作り直してください。伴奏は試聴できます。</p>");
         }
-        body.push_str(&format!(r#"<p class="status">音源と映像ができました。</p><video controls preload="metadata" src="/jobs/{id}/karaoke.mp4"></video><div class="actions"><a class="button" download href="/jobs/{id}/karaoke.mp4">映像を保存（MP4）</a><a class="button secondary" download href="/jobs/{id}/karaoke.mp3">音源を保存（MP3）</a><a class="button secondary" download href="/jobs/{id}/karaoke.wav">音源を保存（WAV）</a></div><h2>伴奏を聴く</h2><audio controls preload="none" src="/jobs/{id}/karaoke.mp3"></audio><details><summary>分離した歌声を確認する</summary><audio controls preload="none" src="/jobs/{id}/vocals.wav"></audio><a download href="/jobs/{id}/vocals.wav">歌声だけを保存</a></details>"#));
+        body.push_str("<p class=\"status\">音源と映像ができました。</p>");
         if let Ok(options) =
             fs::read(app.directory(&id).unwrap().join("settings.json")).and_then(|bytes| {
                 serde_json::from_slice::<Options>(&bytes).map_err(std::io::Error::other)
@@ -517,8 +533,18 @@ async fn job_page(State(app): State<App>, WebPath(id): WebPath<String>) -> Respo
                 &options.preset,
             )
             .unwrap();
-            body.push_str(&format!(r#"<section class="panel"><h2>歌詞と時刻を直す</h2><p>下の時刻は、いま再生している伴奏に合わせています。背景色付きの字幕動画を新しく作ります。</p><form method="post" action="/revise/{id}"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="preset" value="{}"><label for="revision-lyrics">時刻付きの歌詞</label><textarea id="revision-lyrics" name="lyrics" maxlength="65536">{}</textarea><p class="hint">歌い終わりに [00:16.00] のような空の行を入れると、間奏の歌詞を消せます。</p><button type="submit">歌詞だけ直して動画を作る</button></form></section>"#, app.csrf, preset.get_name(), escape(&lrc)));
+            body.push_str(&timing_editor_markup(
+                &id,
+                &app.csrf,
+                preset.get_name(),
+                &lrc,
+            ));
+        } else {
+            body.push_str(&format!(
+                r#"<video controls preload="metadata" src="/jobs/{id}/karaoke.mp4"></video>"#
+            ));
         }
+        body.push_str(&format!(r#"<div class="actions"><a class="button" download href="/jobs/{id}/karaoke.mp4">映像を保存（MP4）</a><a class="button secondary" download href="/jobs/{id}/karaoke.mp3">音源を保存（MP3）</a><a class="button secondary" download href="/jobs/{id}/karaoke.wav">音源を保存（WAV）</a></div><details><summary>字幕と編集履歴を保存する</summary><div class="actions"><a download href="/jobs/{id}/lyrics.lrc">LRC</a><a download href="/jobs/{id}/lyrics.srt">SRT</a><a download href="/jobs/{id}/lyrics.ass">ASS</a><a download href="/jobs/{id}/timing-history.json">編集履歴（保存後）</a></div></details><details><summary>伴奏・分離した歌声を確認する</summary><h2>伴奏</h2><audio controls preload="none" src="/jobs/{id}/karaoke.mp3"></audio><h2>分離した歌声</h2><audio controls preload="none" src="/jobs/{id}/vocals.wav"></audio><a download href="/jobs/{id}/vocals.wav">歌声だけを保存</a></details>"#));
     } else if running {
         body.push_str(&format!("<div class=\"panel\"><p class=\"status\">{}</p><p class=\"hint\">この画面は3秒ごとに更新します。</p></div>",escape(&job.progress.get())));
     } else {
@@ -534,6 +560,34 @@ async fn job_page(State(app): State<App>, WebPath(id): WebPath<String>) -> Respo
     }
     body.push_str(&format!("<div class=\"actions\"><a class=\"button secondary\" href=\"/\">曲を選ぶ画面へ</a><form method=\"post\" action=\"/{}/{id}\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button class=\"secondary\" type=\"submit\">{}</button></form></div>",if running {"cancel"} else {"delete"},app.csrf,if running {"処理を取り消す"} else {"このアプリ内の結果を削除する"}));
     shell(&job.record.title, &body, running).into_response()
+}
+
+fn timing_editor_markup(id: &str, csrf: &str, preset: &str, lrc: &str) -> String {
+    let lrc = escape(lrc);
+    format!(
+        r#"<link rel="stylesheet" href="/assets/timing-editor.css"><script src="/assets/timing-editor.js" defer></script>
+<section class="timing-editor" data-timing-url="/jobs/{id}/timing" aria-label="歌詞の時刻編集">
+  <div class="timing-workspace">
+    <div><video controls preload="metadata" src="/jobs/{id}/karaoke.mp4" aria-label="保存済みの映像を試聴"></video><p class="hint">映像は前回の保存版です。変更した字幕は「保存して再出力」で反映します。</p></div>
+    <div class="panel"><h2>選んだ行の時刻</h2><p class="timing-selection">歌詞を読み込んでいます。</p>
+      <fieldset disabled><legend class="hint">再生している音源に合わせて変更します。</legend>
+      <label for="line-start">開始</label><div class="timing-time"><input id="line-start" name="line-start" type="text" inputmode="decimal" autocomplete="off" aria-describedby="timing-error"><button type="button" class="secondary" data-step="-10" data-edge="start" aria-label="開始を0.1秒前へ">−0.1秒</button><button type="button" class="secondary" data-step="10" data-edge="start" aria-label="開始を0.1秒後へ">+0.1秒</button></div>
+      <label for="line-end">終了</label><div class="timing-time"><input id="line-end" name="line-end" type="text" inputmode="decimal" autocomplete="off" aria-describedby="timing-error"><button type="button" class="secondary" data-step="-10" data-edge="end" aria-label="終了を0.1秒前へ">−0.1秒</button><button type="button" class="secondary" data-step="10" data-edge="end" aria-label="終了を0.1秒後へ">+0.1秒</button></div>
+      <div class="actions"><button type="button" class="secondary" data-use-playhead>再生位置を開始にする</button></div></fieldset>
+      <p class="hint">変更は元に戻せます。保存すると別の結果を作り、元の音源と結果を残します。</p>
+    </div>
+  </div>
+  <p class="error" id="timing-error" role="alert" hidden></p>
+  <div class="timing-player"><label for="playhead">再生位置 <output class="timing-clock" for="playhead">00:00.00</output></label><input id="playhead" name="playhead" type="range" min="0" max="1" step="0.01" value="0" aria-label="再生位置（秒）"></div>
+  <div class="timing-table-wrap"><table class="timing-table"><caption>歌詞の時刻（行を選ぶと開始・終了を変更できます）</caption><thead><tr><th scope="col">行</th><th scope="col">開始 – 終了</th><th scope="col">歌詞</th><th scope="col">曲全体の表示区間</th></tr></thead><tbody></tbody></table></div>
+  <div class="timing-actions"><div class="actions"><button type="button" class="secondary" data-play>▶ 再生</button><button type="button" class="secondary" data-audition>選択行を試聴</button><button type="button" class="secondary" data-undo disabled>元に戻す</button></div>
+    <form class="timing-save" method="post" action="/revise/{id}"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="preset" value="{preset}"><input type="hidden" name="lyrics"><button type="submit" data-save disabled>保存して再出力</button></form>
+    <form class="timing-undo" method="post" action="/undo/{id}" hidden><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="preset" value="{preset}"></form>
+  </div>
+  <p class="hint">保存前の変更はこの画面内で取り消せます。保存した編集は再起動後も「元に戻す」で1段戻した結果を作れます。ASRの歌詞・時刻は候補です。正本と試聴で確認してください。</p>
+  <details class="panel"><summary>LRCを直接編集する</summary><form method="post" action="/revise/{id}"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="preset" value="{preset}"><label for="revision-lyrics">時刻付きの歌詞</label><textarea id="revision-lyrics" name="lyrics" maxlength="65536">{lrc}</textarea><p class="hint">歌い終わりに [00:16.00] のような空の行を入れると、間奏の歌詞を消せます。この欄は上の表とは別に保存します。</p><button type="submit">LRCから動画を作る</button></form></details>
+</section>"#
+    )
 }
 
 #[derive(Deserialize)]
@@ -842,6 +896,8 @@ async fn artifact(
         "karaoke.mp4" => "video/mp4",
         "karaoke.mp3" => "audio/mpeg",
         "karaoke.wav" | "vocals.wav" => "audio/wav",
+        "lyrics.lrc" | "lyrics.srt" | "lyrics.ass" => "text/plain; charset=utf-8",
+        "timing-history.json" => "application/json",
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     let done = app
@@ -907,6 +963,46 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn timing_editor_assets_load_under_the_existing_content_security_policy() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = App::new(temp.path(), 19531).unwrap();
+        for (path, mime, expected) in [
+            (
+                "/assets/timing-editor.js",
+                "text/javascript",
+                "timing-editor",
+            ),
+            ("/assets/timing-editor.css", "text/css", ".timing-editor"),
+        ] {
+            let response = router(app.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("host", "127.0.0.1:19531")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert!(
+                response.headers()[header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with(mime)
+            );
+            assert!(
+                !response.headers()["content-security-policy"]
+                    .to_str()
+                    .unwrap()
+                    .contains("script-src 'unsafe-inline'")
+            );
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert!(std::str::from_utf8(&body).unwrap().contains(expected));
+        }
+    }
 
     #[tokio::test]
     async fn persisted_timing_can_be_read_and_undone_after_app_restart() {
@@ -1055,6 +1151,53 @@ mod tests {
                 .unwrap()
                 .contains("before")
         );
+        for name in [
+            "lyrics.lrc",
+            "lyrics.srt",
+            "lyrics.ass",
+            "timing-history.json",
+        ] {
+            let response = request(
+                &reopened,
+                "GET",
+                &format!("/jobs/{undone_id}/{name}"),
+                String::new(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                fs::read(undone_dir.join(name)).unwrap()
+            );
+        }
+        let response = request(
+            &reopened,
+            "GET",
+            &format!("/jobs/{undone_id}"),
+            String::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let page = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        for expected in [
+            "/assets/timing-editor.js",
+            "歌詞の時刻編集",
+            "選択行を試聴",
+            "保存して再出力",
+            "元に戻す",
+        ] {
+            assert!(page.contains(expected), "{expected}");
+        }
+        assert!(page.contains(&format!("data-timing-url=\"/jobs/{undone_id}/timing\"")));
         for (name, bytes) in preserved {
             assert_eq!(
                 fs::read(edited_dir.join(name)).unwrap(),
@@ -1177,7 +1320,8 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(html.contains("歌詞だけ直して動画を作る"));
+        assert!(html.contains("LRCから動画を作る"));
+        assert!(html.contains("保存して再出力"));
         assert!(html.contains("[00:00.20]corrected"));
         app.stop_workers().await;
     }
