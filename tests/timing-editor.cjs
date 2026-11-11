@@ -58,14 +58,15 @@ test('audition uses the selected interval and pauses at its end', async () => {
     async play() { this.paused = false; },
     pause() { this.paused = true; },
   };
-  const stop = await audition(media, { start: 125, end: 200 });
+  const operation = audition(media, { start: 125, end: 200 });
+  await operation.ready;
   assert.equal(media.currentTime, 1.25);
   assert.equal(media.paused, false);
   media.currentTime = 2.1;
   callbacks.get('timeupdate')();
   assert.equal(media.paused, true);
   assert.equal(media.currentTime, 2);
-  stop();
+  operation.stop();
   assert.equal(callbacks.size, 0);
 });
 
@@ -120,6 +121,55 @@ function domFixture(t, response = initial()) {
   t.after(() => Object.assign(global, old));
   return { nodes, root, fieldset };
 }
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((a, b) => { resolve = a; reject = b; });
+  return { promise, resolve, reject };
+}
+
+test('pending audition A cannot stop audition B after A resolves', async t => {
+  const { nodes, root } = domFixture(t);
+  await mount(root);
+  const video = nodes.get('video');
+  const listeners = new Set();
+  video.addEventListener = (event, fn) => { if (event === 'timeupdate') listeners.add(fn); };
+  video.removeEventListener = (event, fn) => { if (event === 'timeupdate') listeners.delete(fn); };
+  const a = deferred(), b = deferred();
+  let calls = 0;
+  video.play = () => { video.paused = false; return ++calls === 1 ? a.promise : b.promise; };
+  const first = nodes.get('[data-audition]').fire('click');
+  assert.equal(listeners.size, 1);
+  const selectSecond = nodes.get('tbody').children[1].children[0].children[0];
+  await selectSecond.fire('click');
+  const second = nodes.get('[data-audition]').fire('click');
+  assert.equal(listeners.size, 1, 'only B may retain an interval listener');
+  a.resolve(); await first;
+  video.currentTime = 2.5;
+  for (const listener of [...listeners]) listener();
+  assert.equal(video.paused, false, 'A end=1.2 must not stop B end=4');
+  b.resolve(); await second;
+  video.currentTime = 4.2;
+  for (const listener of [...listeners]) listener();
+  assert.equal(video.paused, true);
+  assert.equal(video.currentTime, 4);
+  assert.equal(listeners.size, 0);
+});
+
+test('seek cancels a pending audition immediately; its later rejection is stale', async t => {
+  const { nodes, root } = domFixture(t);
+  await mount(root);
+  const video = nodes.get('video');
+  const pending = deferred();
+  video.play = () => { video.paused = false; return pending.promise; };
+  const first = nodes.get('[data-audition]').fire('click');
+  nodes.get('[name="playhead"]').value = '3';
+  await nodes.get('[name="playhead"]').fire('input');
+  assert.equal(video.paused, true);
+  pending.reject(new Error('stale play interrupted')); await first;
+  assert.equal(nodes.get('[role="alert"]').hidden, true);
+  assert.equal(video.currentTime, 3);
+});
 
 test('DOM editing, selection, invalid-save prevention and exact POST lyrics use the real controller', async t => {
   const { nodes, root, fieldset } = domFixture(t);

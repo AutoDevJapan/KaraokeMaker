@@ -69,20 +69,28 @@
     lrc() { return lrc(this.#lines); }
   }
 
-  async function audition(media, line) {
+  function audition(media, line) {
     const end = line.end / 100;
-    const stop = () => media.removeEventListener('timeupdate', tick);
+    let active = true;
+    const stop = () => {
+      if (!active) return;
+      active = false;
+      media.removeEventListener('timeupdate', tick);
+      media.removeEventListener('pause', stop);
+      media.pause();
+    };
     const tick = () => {
-      if (media.currentTime >= end) {
-        media.pause();
-        media.currentTime = end;
-        stop();
-      }
+      if (active && media.currentTime >= end) { stop(); media.currentTime = end; }
     };
     media.currentTime = line.start / 100;
     media.addEventListener('timeupdate', tick);
-    try { await media.play(); } catch (error) { stop(); throw error; }
-    return stop;
+    media.addEventListener('pause', stop);
+    // Cancellation must be available before play() settles. A stale continuation
+    // never installs another listener or pauses a newer audition.
+    let ready;
+    try { ready = Promise.resolve(media.play()); }
+    catch (error) { stop(); ready = Promise.reject(error); }
+    return { stop, ready };
   }
 
   async function mount(root) {
@@ -102,7 +110,11 @@
     let editor;
     let selected = 0;
     let savedUndo = false;
-    let stopAudition = () => {};
+    let activeAudition = null;
+    const stopAudition = () => {
+      activeAudition?.stop();
+      activeAudition = null;
+    };
     let submitting = false;
     let invalid = false;
     const time = () => {
@@ -128,7 +140,7 @@
         select.type = 'button'; select.className = 'secondary'; select.textContent = String(index + 1);
         select.setAttribute('aria-label', `${index + 1}行目を選ぶ`);
         select.setAttribute('aria-pressed', String(index === selected));
-        select.addEventListener('click', () => { selected = index; invalid = false; displayError(null); refresh(); start.focus(); });
+        select.addEventListener('click', () => { stopAudition(); selected = index; invalid = false; displayError(null); refresh(); start.focus(); });
         number.append(select);
         const times = document.createElement('td'); times.textContent = `${formatTime(line.start)} – ${formatTime(line.end)}`;
         const text = document.createElement('td'); text.textContent = line.text;
@@ -174,7 +186,13 @@
     });
     find('[data-audition]').addEventListener('click', async () => {
       if (!edit()) return;
-      try { stopAudition(); stopAudition = await audition(video, editor.lines[selected]); } catch (error) { displayError(error); }
+      stopAudition();
+      const operation = audition(video, editor.lines[selected]);
+      activeAudition = operation;
+      try { await operation.ready; }
+      catch (error) {
+        if (activeAudition === operation) { stopAudition(); displayError(error); }
+      }
     });
     for (const event of ['timeupdate', 'play', 'pause', 'seeked']) video.addEventListener(event, time);
     undo.addEventListener('click', () => {
