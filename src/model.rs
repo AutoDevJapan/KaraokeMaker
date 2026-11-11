@@ -1,5 +1,7 @@
 use crate::Progress;
-use anyhow::{Context, Result, ensure};
+#[cfg(feature = "gpu")]
+use anyhow::Context;
+use anyhow::{Result, ensure};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -99,8 +101,7 @@ pub fn ensure_weights(cache: &Path, progress: &Progress) -> Result<Vec<u8>> {
         MODEL_SHA256,
         Duration::from_secs(300),
         progress,
-    )
-    .context("分離モデルを取得できませんでした。初回はインターネット接続が必要です。")?;
+    )?;
     let bytes = fs::read(path)?;
     verify(&bytes)?;
     Ok(bytes)
@@ -256,6 +257,28 @@ pub fn separate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn standard_model_initial_cancellation_keeps_the_actual_reason() {
+        let temp = tempfile::tempdir().unwrap();
+        let progress = Progress::default();
+        progress
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let error = ensure_weights(temp.path(), &progress).unwrap_err();
+        assert!(
+            error.to_string().contains("取り消し"),
+            "displayed reason: {error}"
+        );
+        assert!(!temp.path().join("htdemucs.safetensors").exists());
+        assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".part")
+        }));
+    }
+
     #[test]
     fn separation_model_stalled_download_cancels_and_preserves_existing_cache() {
         use std::{
