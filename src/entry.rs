@@ -160,10 +160,23 @@ enum Mode {
     },
 }
 pub fn main() {
+    main_with_dialog(true);
+}
+
+/// Command-line entry points never wait for a desktop error dialog.
+pub fn cli_main() {
+    main_with_dialog(false);
+}
+
+fn main_with_dialog(desktop: bool) {
+    // Any explicit subcommand is a command-line invocation, including commands
+    // added later. Parse first instead of maintaining a list of command names.
+    let cli = Cli::parse();
+    let interactive = desktop && cli.command.is_none();
     let result = std::thread::Builder::new()
         .name("karaoke-main".into())
         .stack_size(8 * 1024 * 1024)
-        .spawn(run)
+        .spawn(move || run(cli))
         .expect("thread creation failed")
         .join();
     crate::subtitle_assets::shutdown();
@@ -171,19 +184,23 @@ pub fn main() {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             eprintln!("{error:#}");
-            show_error(&error.to_string());
+            if interactive {
+                show_error(&error.to_string());
+            }
             std::process::exit(1);
         }
         Err(_) => {
-            show_error(
-                "アプリを起動できませんでした。GPUドライバーなどの動作環境を確認してください。",
-            );
+            let message =
+                "アプリを起動できませんでした。GPUドライバーなどの動作環境を確認してください。";
+            eprintln!("{message}");
+            if interactive {
+                show_error(message);
+            }
             std::process::exit(1);
         }
     }
 }
-fn run() -> Result<()> {
-    let cli = Cli::parse();
+fn run(cli: Cli) -> Result<()> {
     let data = cli.data.unwrap_or(
         std::env::current_exe()?
             .parent()
@@ -562,16 +579,6 @@ fn show_error(message: &str) {
             caption: *const u16,
             kind: u32,
         ) -> i32;
-    }
-    if std::env::args().any(|arg| {
-        arg == "--no-open"
-            || arg == "convert"
-            || arg == "render"
-            || arg == "fetch-model"
-            || arg == "check"
-            || arg == "inspect-delivery"
-    }) {
-        return;
     }
     let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
     let title: Vec<u16> = "KaraokeMaker".encode_utf16().chain(Some(0)).collect();
