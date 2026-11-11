@@ -65,7 +65,7 @@ test('audition uses the selected interval and pauses at its end', async () => {
   media.currentTime = 2.1;
   callbacks.get('timeupdate')();
   assert.equal(media.paused, true);
-  assert.equal(media.currentTime, 2);
+  assert.equal(media.currentTime, 2.1, 'automatic stopping must never seek backwards');
   operation.stop();
   assert.equal(callbacks.size, 0);
 });
@@ -153,7 +153,7 @@ test('pending audition A cannot stop audition B after A resolves', async t => {
   video.currentTime = 4.2;
   for (const listener of [...listeners]) listener();
   assert.equal(video.paused, true);
-  assert.equal(video.currentTime, 4);
+  assert.equal(video.currentTime, 4.2);
   assert.equal(listeners.size, 0);
 });
 
@@ -244,6 +244,25 @@ test('old seek events do not cancel a new audition; seeking back to its start af
   assert.equal(media.currentTime, 2);
   assert.equal(media.paused, true, 'seeking to the start after playback advanced is a user seek');
   assert.equal(handlers.get('timeupdate').size, 0);
+});
+
+test('a completed native seek followed by an older timeupdate never writes the old end', async () => {
+  const listeners = new Map();
+  const media = { currentTime: 0, paused: true, seeking: false,
+    addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); },
+    removeEventListener(name, fn) { listeners.get(name)?.delete(fn); },
+    async play() { this.paused = false; }, pause() { this.paused = true; },
+  };
+  const fire = name => { for (const fn of [...(listeners.get(name) || [])]) fn(); };
+  const operation = audition(media, { start: 20, end: 200 }); await operation.ready;
+  media.currentTime = 1; fire('timeupdate');
+  media.currentTime = 3.5; media.seeking = true;
+  // The seek may complete in the stable-state section before its event task.
+  media.seeking = false;
+  fire('timeupdate'); fire('seeking'); fire('seeked');
+  assert.equal(media.currentTime, 3.5);
+  assert.equal(media.paused, true);
+  assert.equal(listeners.get('timeupdate').size, 0);
 });
 
 test('line selection, submit, undo, normal playback and edit cancel pending auditions', async t => {

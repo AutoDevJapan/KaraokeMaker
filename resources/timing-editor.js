@@ -87,7 +87,9 @@
       // Resolve a currently active seek first; never clamp it to the old end.
       if (media.seeking) { seeking(); return; }
       if (active && Math.abs(media.currentTime - start) > 0.001) playedPastStart = true;
-      if (active && media.currentTime >= end) { stop(); media.currentTime = end; }
+      // Stopping is not seeking: a completed user seek may already have changed
+      // currentTime before any queued notification. Never write the old end.
+      if (active && media.currentTime >= end) stop();
     };
     // pause events are queued; one from a replaced audition can arrive after
     // the next play() has synchronously cleared paused.
