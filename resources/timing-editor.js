@@ -76,15 +76,18 @@
       if (!active) return;
       active = false;
       media.removeEventListener('timeupdate', tick);
-      media.removeEventListener('pause', stop);
+      media.removeEventListener('pause', paused);
       media.pause();
     };
     const tick = () => {
       if (active && media.currentTime >= end) { stop(); media.currentTime = end; }
     };
+    // pause events are queued; one from a replaced audition can arrive after
+    // the next play() has synchronously cleared paused.
+    const paused = () => { if (media.paused) stop(); };
     media.currentTime = line.start / 100;
     media.addEventListener('timeupdate', tick);
-    media.addEventListener('pause', stop);
+    media.addEventListener('pause', paused);
     // Cancellation must be available before play() settles. A stale continuation
     // never installs another listener or pauses a newer audition.
     let ready;

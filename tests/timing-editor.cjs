@@ -172,6 +172,26 @@ test('seek cancels a pending audition immediately; its later rejection is stale'
   assert.equal(video.currentTime, 3);
 });
 
+test('an already queued pause event from A does not cancel newer playing audition B', async () => {
+  const listeners = new Map();
+  const queued = [];
+  const media = {
+    currentTime: 0, paused: true,
+    addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); },
+    removeEventListener(name, fn) { listeners.get(name)?.delete(fn); },
+    async play() { this.paused = false; },
+    pause() { if (!this.paused) { this.paused = true; queued.push('pause'); } },
+  };
+  const first = audition(media, { start: 20, end: 120 }); await first.ready;
+  first.stop();
+  const second = audition(media, { start: 200, end: 400 }); await second.ready;
+  for (const name of queued.splice(0)) for (const listener of [...listeners.get(name)]) listener();
+  assert.equal(media.paused, false, 'pause is queued by the media standard; B is already playing');
+  assert.equal(listeners.get('timeupdate').size, 1);
+  second.stop();
+  assert.equal(listeners.get('timeupdate').size, 0);
+});
+
 test('line selection, submit, undo, normal playback and edit cancel pending auditions', async t => {
   for (const action of ['select', 'save', 'undo', 'play', 'edit', 'invalid edit']) {
     await t.test(action, async t => {
