@@ -205,7 +205,9 @@ test('native video seeking cancels audition without snapping to the old interval
   // The programmatic initial seek also fires seeking; it must keep the audition.
   media.seeking = true; fire('seeking'); media.seeking = false; fire('seeked'); await operation.ready;
   assert.equal(media.paused, false);
-  media.currentTime = 3.5; media.seeking = true; fire('seeking'); fire('timeupdate'); media.seeking = false; fire('seeked');
+  media.currentTime = 3.5; media.seeking = true;
+  fire('timeupdate'); // a previously queued timeupdate can run before the new seeking task
+  fire('seeking'); media.seeking = false; fire('seeked');
   assert.equal(media.currentTime, 3.5, 'native seek beyond the line keeps the requested position');
   assert.equal(media.paused, true);
   assert.equal(handlers.get('timeupdate').size, 0);

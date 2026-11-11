@@ -83,6 +83,9 @@
       media.pause();
     };
     const tick = () => {
+      // A queued timeupdate can observe the new position before seeking fires.
+      // Resolve a currently active seek first; never clamp it to the old end.
+      if (media.seeking) { seeking(); return; }
       if (active && Math.abs(media.currentTime - start) > 0.001) playedPastStart = true;
       if (active && media.currentTime >= end) { stop(); media.currentTime = end; }
     };
