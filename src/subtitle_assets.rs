@@ -30,8 +30,8 @@ impl NetworkRuntime {
         let mut state = self
             .runtime
             .lock()
-            .map_err(|_| anyhow::anyhow!("字幕の通信状態を確認できません。"))?;
-        ensure!(!state.1, "字幕の通信処理は終了しています。");
+            .map_err(|_| anyhow::anyhow!("取得の通信状態を確認できません。"))?;
+        ensure!(!state.1, "取得の通信処理は終了しています。");
         if state.0.is_none() {
             state.0 = Some(
                 tokio::runtime::Builder::new_multi_thread()
@@ -132,7 +132,7 @@ fn resolve_files_with(
     progress: &Progress,
     fetch: &mut impl FnMut(&Source, &Path, &Progress) -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
-    ensure!(!sources.is_empty(), "字幕の実行部品の一覧が空です。");
+    ensure!(!sources.is_empty(), "取得ファイルの一覧が空です。");
     let _lock = setup_lock(cache, progress)?;
     let mut files = Vec::new();
     for source in sources {
@@ -233,7 +233,7 @@ fn verified(path: &Path, size: u64, expected: &str) -> Result<Option<fs::File>> 
     };
     ensure!(
         !metadata.file_type().is_symlink() && metadata.is_file(),
-        "字幕の実行部品が通常のファイルではありません：{}",
+        "取得ファイルが通常のファイルではありません：{}",
         path.display()
     );
     if metadata.len() != size {
@@ -261,7 +261,8 @@ fn preserve_invalid(path: &Path) -> Result<()> {
         Ok(metadata) => {
             ensure!(
                 !metadata.file_type().is_symlink(),
-                "字幕の保存先がリンクです。"
+                "取得ファイルの保存先がリンクです：{}",
+                path.display()
             );
             let saved = path.with_file_name(format!(
                 "{}.invalid-{}",
@@ -271,12 +272,9 @@ fn preserve_invalid(path: &Path) -> Result<()> {
                 uuid::Uuid::new_v4()
             ));
             fs::rename(path, &saved).with_context(|| {
-                format!("不完全な字幕の実行部品を保持できません：{}", path.display())
+                format!("不完全な取得ファイルを保持できません：{}", path.display())
             })?;
-            eprintln!(
-                "不完全な字幕の実行部品を{}へ保持しました。",
-                saved.display()
-            );
+            eprintln!("不完全な取得ファイルを{}へ保持しました。", saved.display());
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
@@ -669,6 +667,45 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shared_cache_repair_failure_names_the_file_and_keeps_original_io_error() {
+        use std::os::windows::fs::OpenOptionsExt;
+        for name in ["melband.onnx", "subtitle-model.bin"] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join(name);
+            fs::write(&path, b"keep original").unwrap();
+            let held = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(&path)
+                .unwrap();
+            let error = preserve_invalid(&path).unwrap_err();
+            let display = error.to_string();
+            assert!(
+                display.contains(name) && display.contains("取得ファイル"),
+                "{display}"
+            );
+            assert!(!display.contains("字幕"), "{display}");
+            assert!(error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::raw_os_error)
+                    == Some(32)
+            }));
+            assert_eq!(fs::read(&path).unwrap(), b"keep original");
+            drop(held);
+            preserve_invalid(&path).unwrap();
+            assert!(!path.exists());
+            let kept = fs::read_dir(temp.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            assert_eq!(kept.len(), 1);
+            assert_eq!(fs::read(&kept[0]).unwrap(), b"keep original");
+        }
     }
 
     fn sdk_fixture() -> (Sdk, Vec<u8>) {
