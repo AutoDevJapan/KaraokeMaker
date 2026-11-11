@@ -1,9 +1,11 @@
 use crate::Progress;
-use anyhow::{Context, Result, ensure};
+#[cfg(feature = "gpu")]
+use anyhow::Context;
+use anyhow::{Result, ensure};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read, path::Path, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, ValueEnum, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -24,67 +26,15 @@ fn model_file(
     sha: &str,
     progress: &Progress,
 ) -> Result<std::path::PathBuf> {
-    use std::io::Write;
-    fn valid(path: &Path, size: u64, expected: &str) -> Result<bool> {
-        if !path.is_file() || fs::metadata(path)?.len() != size {
-            return Ok(false);
-        }
-        let mut digest = Sha256::new();
-        let mut reader = fs::File::open(path)?;
-        let mut buffer = [0u8; 65536];
-        loop {
-            let count = reader.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            digest.update(&buffer[..count]);
-        }
-        Ok(format!("{:x}", digest.finalize()) == expected)
-    }
-    fs::create_dir_all(cache)?;
-    let path = cache.join(name);
-    if valid(&path, size, sha)? {
-        return Ok(path);
-    }
-    progress.set(format!("分離モデル{name}を取得しています。"));
-    let temporary = cache.join(format!("{}.part", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<()> {
-        let mut response = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(1200))
-            .build()?
-            .get(url)
-            .send()?
-            .error_for_status()?;
-        let mut writer = fs::File::create(&temporary)?;
-        let mut buffer = [0u8; 65536];
-        let mut count = 0u64;
-        loop {
-            progress.check()?;
-            let n = response.read(&mut buffer)?;
-            if n == 0 {
-                break;
-            }
-            count += n as u64;
-            ensure!(count <= size, "分離モデルの大きさが不正です。");
-            writer.write_all(&buffer[..n])?;
-        }
-        writer.sync_all()?;
-        drop(writer);
-        ensure!(
-            valid(&temporary, size, sha)?,
-            "分離モデルの照合に失敗しました。"
-        );
-        if path.exists() {
-            fs::remove_file(&path)?;
-        }
-        fs::rename(&temporary, &path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result?;
-    Ok(path)
+    crate::subtitle_assets::verified_file(
+        cache,
+        name,
+        url,
+        size,
+        sha,
+        Duration::from_secs(1200),
+        progress,
+    )
 }
 
 pub fn separate_using(
@@ -143,47 +93,17 @@ fn verify(bytes: &[u8]) -> Result<()> {
 }
 
 pub fn ensure_weights(cache: &Path, progress: &Progress) -> Result<Vec<u8>> {
-    fs::create_dir_all(cache)?;
-    let path = cache.join("htdemucs.safetensors");
-    if path.is_file() {
-        let bytes = fs::read(&path)?;
-        if verify(&bytes).is_ok() {
-            return Ok(bytes);
-        }
-        // A damaged cache is never passed to the inference engine.
-        fs::remove_file(&path)?;
-    }
-    progress.set("初回の分離モデルを取得しています（約84MB）。");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()?;
-    let mut response = client
-        .get(MODEL_URL)
-        .send()
-        .context("分離モデルを取得できませんでした。初回はインターネット接続が必要です。")?
-        .error_for_status()?;
-    let mut bytes = Vec::with_capacity(MODEL_SIZE);
-    let mut chunk = [0u8; 65536];
-    loop {
-        progress.check()?;
-        let count = response.read(&mut chunk)?;
-        if count == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&chunk[..count]);
-        ensure!(
-            bytes.len() <= MODEL_SIZE,
-            "取得した分離モデルの大きさが一致しません。"
-        );
-    }
+    let path = crate::subtitle_assets::verified_file(
+        cache,
+        "htdemucs.safetensors",
+        MODEL_URL,
+        MODEL_SIZE as u64,
+        MODEL_SHA256,
+        Duration::from_secs(300),
+        progress,
+    )?;
+    let bytes = fs::read(path)?;
     verify(&bytes)?;
-    let temp = cache.join(format!("{}.part", uuid::Uuid::new_v4()));
-    fs::write(&temp, &bytes)?;
-    if path.exists() {
-        fs::remove_file(&temp)?;
-    } else {
-        fs::rename(&temp, &path)?;
-    }
     Ok(bytes)
 }
 
@@ -337,6 +257,229 @@ pub fn separate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn standard_model_initial_cancellation_keeps_the_actual_reason() {
+        let temp = tempfile::tempdir().unwrap();
+        let progress = Progress::default();
+        progress
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let error = ensure_weights(temp.path(), &progress).unwrap_err();
+        assert!(
+            error.to_string().contains("取り消し"),
+            "displayed reason: {error}"
+        );
+        assert!(!temp.path().join("htdemucs.safetensors").exists());
+        assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".part")
+        }));
+    }
+
+    #[test]
+    fn separation_model_stalled_download_cancels_and_preserves_existing_cache() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            sync::mpsc,
+            time::Instant,
+        };
+        for send_headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (ready, received) = mpsc::channel();
+            let (release, wait_release) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0u8; 2048];
+                assert!(socket.read(&mut request).unwrap() > 0);
+                if send_headers {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    socket.flush().unwrap();
+                }
+                ready.send(()).unwrap();
+                let _ = wait_release.recv_timeout(Duration::from_secs(3));
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let original = temp.path().join("model.bin");
+            fs::write(&original, b"keep damaged original").unwrap();
+            let progress = Progress::default();
+            let cancel_progress = progress.clone();
+            let cancel = std::thread::spawn(move || {
+                received.recv_timeout(Duration::from_secs(5)).unwrap();
+                let at = Instant::now();
+                cancel_progress
+                    .cancelled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                at
+            });
+            let result = model_file(
+                temp.path(),
+                "model.bin",
+                &format!("http://{address}/model"),
+                5,
+                &format!("{:x}", Sha256::digest(b"model")),
+                &progress,
+            );
+            let cancel_at = cancel.join().unwrap();
+            let elapsed = cancel_at.elapsed();
+            let _ = release.send(());
+            server.join().unwrap();
+            assert!(result.is_err());
+            assert!(
+                elapsed < Duration::from_millis(750),
+                "model cancel waited {elapsed:?}; headers={send_headers}"
+            );
+            assert!(format!("{:#}", result.unwrap_err()).contains("取り消し"));
+            assert!(
+                progress.get().contains("分離モデル"),
+                "current operation: {}",
+                progress.get()
+            );
+            assert_eq!(fs::read(original).unwrap(), b"keep damaged original");
+            assert!(
+                fs::read_dir(temp.path()).unwrap().all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".part")),
+                "no partial model files"
+            );
+        }
+    }
+
+    #[test]
+    fn model_download_verifies_repairs_keeps_bad_bytes_and_reuses_offline() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let expected = format!("{:x}", Sha256::digest(b"model"));
+        for body in [
+            b"model".as_slice(),
+            b"short".as_slice(),
+            b"bad".as_slice(),
+            b"model!".as_slice(),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = body.to_vec();
+            let succeeds = body == b"model";
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0u8; 2048];
+                assert!(socket.read(&mut request).unwrap() > 0);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                socket.write_all(&body).unwrap();
+            });
+            let temp = tempfile::tempdir().unwrap();
+            fs::write(temp.path().join("model.bin"), b"keep damaged model").unwrap();
+            let result = model_file(
+                temp.path(),
+                "model.bin",
+                &format!("http://{address}/model"),
+                5,
+                &expected,
+                &Progress::default(),
+            );
+            server.join().unwrap();
+            assert_eq!(result.is_ok(), succeeds);
+            if succeeds {
+                let path = result.unwrap();
+                assert_eq!(fs::read(&path).unwrap(), b"model");
+                let invalid = fs::read_dir(temp.path())
+                    .unwrap()
+                    .filter_map(|entry| {
+                        let entry = entry.unwrap();
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .contains(".invalid-")
+                            .then(|| entry.path())
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(invalid.len(), 1);
+                assert_eq!(fs::read(&invalid[0]).unwrap(), b"keep damaged model");
+                // The server has finished: this can pass only by using verified cache.
+                assert_eq!(
+                    model_file(
+                        temp.path(),
+                        "model.bin",
+                        &format!("http://{address}/offline"),
+                        5,
+                        &expected,
+                        &Progress::default()
+                    )
+                    .unwrap(),
+                    path
+                );
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains("model.bin"),
+                    "wrong download identity: {error}"
+                );
+                assert!(!error.contains("字幕"), "wrong operation: {error}");
+                assert_eq!(
+                    fs::read(temp.path().join("model.bin")).unwrap(),
+                    b"keep damaged model"
+                );
+            }
+            assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".part")
+            }));
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let progress = Progress::default();
+        progress
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let temp = tempfile::tempdir().unwrap();
+        assert!(
+            format!(
+                "{:#}",
+                model_file(
+                    temp.path(),
+                    "model.bin",
+                    &format!("http://{}/model", listener.local_addr().unwrap()),
+                    5,
+                    &expected,
+                    &progress
+                )
+                .unwrap_err()
+            )
+            .contains("取り消し")
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert!(!temp.path().join("model.bin").exists());
+    }
+
     #[test]
     fn truncated_or_different_model_is_rejected() {
         assert!(verify(b"not a model").is_err());
