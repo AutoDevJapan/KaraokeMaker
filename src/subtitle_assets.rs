@@ -10,7 +10,8 @@ use std::{
     time::Duration,
 };
 
-/// One owned network runtime per app process. The default OS DNS resolver uses
+/// One owned asset-download runtime per app process, including CUDA setup.
+/// The default OS DNS resolver uses
 /// blocking tasks; cancellation must not drop a short-lived runtime and wait for
 /// getaddrinfo. Bound those tasks across retries instead of abandoning a new
 /// thread pool for every file. DNS tasks hold only host names, never cache files.
@@ -312,6 +313,33 @@ fn download(source: &Source, destination: &Path, progress: &Progress) -> Result<
     })
 }
 
+/// Shared by subtitle assets and CUDA setup. Call from a blocking app worker;
+/// cancelling a request must not drop a short-lived runtime or wait for OS DNS.
+#[cfg(any(feature = "ort", test))]
+pub(crate) fn download_file(
+    name: &str,
+    url: &str,
+    expected_size: u64,
+    destination: &Path,
+    progress: &Progress,
+) -> Result<()> {
+    download_to(
+        &NETWORK,
+        name,
+        url,
+        expected_size,
+        destination,
+        progress,
+        || {
+            Ok(reqwest::Client::builder()
+                .timeout(Duration::from_secs(1200))
+                .connect_timeout(Duration::from_secs(30))
+                .read_timeout(Duration::from_secs(30))
+                .build()?)
+        },
+    )
+}
+
 fn download_with_client(
     network: &NetworkRuntime,
     source: &Source,
@@ -324,13 +352,30 @@ fn download_with_client(
         "字幕の実行部品を初回準備しています：{}",
         source.name
     ));
+    download_to(
+        network,
+        &source.name,
+        &source.url,
+        source.size,
+        destination,
+        progress,
+        client,
+    )
+}
+
+fn download_to(
+    network: &NetworkRuntime,
+    name: &str,
+    url: &str,
+    expected_size: u64,
+    destination: &Path,
+    progress: &Progress,
+    client: impl FnOnce() -> Result<reqwest::Client>,
+) -> Result<()> {
+    progress.check()?;
     network.handle()?.block_on(async {
         let transfer = async {
-            let mut response = client()?
-                .get(&source.url)
-                .send()
-                .await?
-                .error_for_status()?;
+            let mut response = client()?.get(url).send().await?.error_for_status()?;
             let mut file = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -340,10 +385,17 @@ fn download_with_client(
                 progress.check()?;
                 total += bytes.len() as u64;
                 ensure!(
-                    total <= source.size,
-                    "字幕の実行部品のサイズが固定値を超えました。"
+                    total <= expected_size,
+                    "実行部品のサイズが固定値を超えました。"
                 );
                 file.write_all(&bytes)?;
+                if total / (8 * 1024 * 1024) != (total - bytes.len() as u64) / (8 * 1024 * 1024) {
+                    progress.set(format!(
+                        "実行部品を準備しています：{name}（{} / {} MB）",
+                        total / 1_000_000,
+                        expected_size / 1_000_000
+                    ));
+                }
             }
             file.sync_all()?;
             progress.check()
