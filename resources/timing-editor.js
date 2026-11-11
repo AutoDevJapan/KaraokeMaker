@@ -162,11 +162,12 @@
     }
     function edit(change) {
       if (!editor || submitting) return false;
+      stopAudition();
       try {
         let a = parseTime(start.value), b = parseTime(end.value);
         if (change) [a, b] = change(a, b);
         editor.replace(selected, a, b);
-        invalid = false; displayError(null); stopAudition(); refresh(); return true;
+        invalid = false; displayError(null); refresh(); return true;
       } catch (error) {
         invalid = true; displayError(error); save.disabled = true;
         start.setAttribute('aria-invalid', 'true'); end.setAttribute('aria-invalid', 'true'); return false;
@@ -203,7 +204,7 @@
     });
     form.addEventListener('submit', event => {
       if (!edit() || submitting) { event.preventDefault(); return; }
-      submitting = true; save.disabled = true; undo.disabled = true; video.pause();
+      stopAudition(); submitting = true; save.disabled = true; undo.disabled = true; video.pause();
       for (const input of root.querySelectorAll('fieldset')) input.disabled = true;
       // CSRF, preset and lyrics live outside the disabled editor fieldset.
     });

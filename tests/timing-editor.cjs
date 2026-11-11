@@ -112,14 +112,15 @@ function domFixture(t, response = initial()) {
     querySelectorAll: s => s === 'fieldset' ? [fieldset] : [] };
   const old = { document: global.document, window: global.window, fetch: global.fetch };
   global.document = { createElement: () => new Element() };
-  global.window = { addEventListener() {} };
+  const windowEvents = new Map();
+  global.window = { addEventListener(name, listener) { windowEvents.set(name, listener); } };
   global.fetch = async (url, options) => {
     assert.equal(url, root.dataset.timingUrl);
     assert.equal(options.credentials, 'same-origin');
     return { ok: response !== null, json: async () => response };
   };
   t.after(() => Object.assign(global, old));
-  return { nodes, root, fieldset };
+  return { nodes, root, fieldset, windowEvents };
 }
 
 function deferred() {
@@ -169,6 +170,55 @@ test('seek cancels a pending audition immediately; its later rejection is stale'
   pending.reject(new Error('stale play interrupted')); await first;
   assert.equal(nodes.get('[role="alert"]').hidden, true);
   assert.equal(video.currentTime, 3);
+});
+
+test('line selection, submit, undo, normal playback and edit cancel pending auditions', async t => {
+  for (const action of ['select', 'save', 'undo', 'play', 'edit', 'invalid edit']) {
+    await t.test(action, async t => {
+      const { nodes, root } = domFixture(t);
+      await mount(root);
+      const video = nodes.get('video');
+      const listeners = new Set();
+      video.addEventListener = (event, fn) => { if (event === 'timeupdate') listeners.add(fn); };
+      video.removeEventListener = (event, fn) => { if (event === 'timeupdate') listeners.delete(fn); };
+      const pending = deferred();
+      let playCalls = 0;
+      video.play = () => { video.paused = false; return ++playCalls === 1 ? pending.promise : Promise.resolve(); };
+      const attempt = nodes.get('[data-audition]').fire('click');
+      assert.equal(listeners.size, 1);
+      if (action === 'select') await nodes.get('tbody').children[1].children[0].children[0].fire('click');
+      if (action === 'save') await nodes.get('.timing-save').fire('submit');
+      if (action === 'undo') await nodes.get('[data-undo]').fire('click');
+      if (action === 'play') await nodes.get('[data-play]').fire('click');
+      if (action.endsWith('edit')) {
+        nodes.get('[name="line-start"]').value = action === 'edit' ? '0.30' : '4.99';
+        await nodes.get('[name="line-start"]').fire('change');
+      }
+      assert.equal(listeners.size, 0, `${action} must cancel before play settles`);
+      pending.reject(new Error('cancelled play')); await attempt;
+      if (action !== 'invalid edit') assert.equal(nodes.get('[role="alert"]').hidden, true);
+    });
+  }
+});
+
+test('table changes prompt before unload; only the table save suppresses that prompt', async t => {
+  const { nodes, root, windowEvents } = domFixture(t);
+  await mount(root);
+  const leave = () => {
+    const event = { blocked: false, preventDefault() { this.blocked = true; } };
+    windowEvents.get('beforeunload')(event);
+    return event.blocked;
+  };
+  assert.equal(leave(), false);
+  nodes.get('[name="line-start"]').value = '0.30';
+  await nodes.get('[name="line-start"]').fire('change');
+  assert.equal(leave(), true, 'separate LRC-form navigation must not mark the table saved');
+  await nodes.get('[data-undo]').fire('click');
+  assert.equal(leave(), false);
+  nodes.get('[name="line-start"]').value = '0.40';
+  await nodes.get('[name="line-start"]').fire('change');
+  await nodes.get('.timing-save').fire('submit');
+  assert.equal(leave(), false);
 });
 
 test('DOM editing, selection, invalid-save prevention and exact POST lyrics use the real controller', async t => {
