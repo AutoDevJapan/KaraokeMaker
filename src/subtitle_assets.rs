@@ -313,6 +313,35 @@ fn download(source: &Source, destination: &Path, progress: &Progress) -> Result<
     })
 }
 
+/// Separation models share verified cache publication and cancellable transfer.
+pub(crate) fn verified_file(
+    cache: &Path,
+    name: &str,
+    url: &str,
+    size: u64,
+    sha256: &str,
+    timeout: Duration,
+    progress: &Progress,
+) -> Result<PathBuf> {
+    let source = Source {
+        name: name.into(),
+        url: url.into(),
+        size,
+        sha256: sha256.into(),
+    };
+    let mut paths =
+        resolve_files_with(cache, &[source], progress, &mut |source, path, progress| {
+            download_with_client(&NETWORK, source, path, progress, || {
+                Ok(reqwest::Client::builder()
+                    .timeout(timeout)
+                    .connect_timeout(Duration::from_secs(30))
+                    .read_timeout(Duration::from_secs(30))
+                    .build()?)
+            })
+        })?;
+    paths.pop().context("分離モデルの保存先を確認できません。")
+}
+
 /// Shared by subtitle assets and CUDA setup. Call from a blocking app worker;
 /// cancelling a request must not drop a short-lived runtime or wait for OS DNS.
 #[cfg(any(feature = "ort", test))]
