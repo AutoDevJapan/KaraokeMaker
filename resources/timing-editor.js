@@ -73,33 +73,32 @@
     const start = line.start / 100;
     const end = line.end / 100;
     let active = true;
-    let initialSeek = true;
+    let playedPastStart = false;
     const stop = () => {
       if (!active) return;
       active = false;
       media.removeEventListener('timeupdate', tick);
       media.removeEventListener('pause', paused);
       media.removeEventListener('seeking', seeking);
-      media.removeEventListener('seeked', seeked);
       media.pause();
     };
     const tick = () => {
+      if (active && Math.abs(media.currentTime - start) > 0.001) playedPastStart = true;
       if (active && media.currentTime >= end) { stop(); media.currentTime = end; }
     };
     // pause events are queued; one from a replaced audition can arrive after
     // the next play() has synchronously cleared paused.
     const paused = () => { if (media.paused) stop(); };
     const seeking = () => {
-      // The initial programmatic seek belongs to this operation. Any later
-      // native video-control seek cancels it and keeps the user's position.
-      if (!initialSeek || Math.abs(media.currentTime - start) > 0.001) stop();
+      // Media events have no operation id and old seeked tasks may reach a new
+      // listener. Use this operation's actual position and playback progress,
+      // never a queued seeked notification, to recognize its initial seek.
+      if (media.seeking && (playedPastStart || Math.abs(media.currentTime - start) > 0.001)) stop();
     };
-    const seeked = () => { initialSeek = false; };
     media.currentTime = start;
     media.addEventListener('timeupdate', tick);
     media.addEventListener('pause', paused);
     media.addEventListener('seeking', seeking);
-    media.addEventListener('seeked', seeked);
     // Cancellation must be available before play() settles. A stale continuation
     // never installs another listener or pauses a newer audition.
     let ready;

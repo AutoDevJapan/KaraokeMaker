@@ -194,7 +194,7 @@ test('an already queued pause event from A does not cancel newer playing auditio
 
 test('native video seeking cancels audition without snapping to the old interval end', async () => {
   const handlers = new Map();
-  const media = { currentTime: 0, paused: true,
+  const media = { currentTime: 0, paused: true, seeking: false,
     addEventListener(name, fn) { if (!handlers.has(name)) handlers.set(name, new Set()); handlers.get(name).add(fn); },
     removeEventListener(name, fn) { handlers.get(name)?.delete(fn); },
     async play() { this.paused = false; },
@@ -203,9 +203,9 @@ test('native video seeking cancels audition without snapping to the old interval
   const fire = event => { for (const handler of [...(handlers.get(event) || [])]) handler(); };
   const operation = audition(media, { start: 125, end: 200 });
   // The programmatic initial seek also fires seeking; it must keep the audition.
-  fire('seeking'); fire('seeked'); await operation.ready;
+  media.seeking = true; fire('seeking'); media.seeking = false; fire('seeked'); await operation.ready;
   assert.equal(media.paused, false);
-  media.currentTime = 3.5; fire('seeking'); fire('timeupdate'); fire('seeked');
+  media.currentTime = 3.5; media.seeking = true; fire('seeking'); fire('timeupdate'); media.seeking = false; fire('seeked');
   assert.equal(media.currentTime, 3.5, 'native seek beyond the line keeps the requested position');
   assert.equal(media.paused, true);
   assert.equal(handlers.get('timeupdate').size, 0);
@@ -213,9 +213,34 @@ test('native video seeking cancels audition without snapping to the old interval
   // inside the line still cancels without changing the requested position.
   media.currentTime = 1.25;
   const next = audition(media, { start: 125, end: 200 }); await next.ready;
-  media.currentTime = 1.6; fire('seeking'); fire('seeked'); fire('timeupdate');
+  media.currentTime = 1.6; media.seeking = true; fire('seeking'); media.seeking = false; fire('seeked'); fire('timeupdate');
   assert.equal(media.currentTime, 1.6);
   assert.equal(media.paused, true);
+  assert.equal(handlers.get('timeupdate').size, 0);
+});
+
+test('old seek events do not cancel a new audition; seeking back to its start after playback does', async () => {
+  const handlers = new Map();
+  const media = { currentTime: 0, paused: true, seeking: true,
+    addEventListener(name, fn) { if (!handlers.has(name)) handlers.set(name, new Set()); handlers.get(name).add(fn); },
+    removeEventListener(name, fn) { handlers.get(name)?.delete(fn); },
+    async play() { this.paused = false; }, pause() { this.paused = true; },
+  };
+  const fire = event => { for (const fn of [...(handlers.get(event) || [])]) fn(); };
+  const first = audition(media, { start: 20, end: 120 }); await first.ready;
+  first.stop();
+  const second = audition(media, { start: 200, end: 400 }); await second.ready;
+  fire('seeked'); // queued by A, observed by B's listeners
+  fire('seeking'); fire('seeked'); // B's own programmatic initial seek
+  media.seeking = false;
+  assert.equal(media.paused, false);
+  media.currentTime = 2.4; fire('timeupdate');
+  assert.equal(media.paused, false);
+  fire('seeking'); // old queued seeking task after the actual seek completed
+  assert.equal(media.paused, false, 'completed native seek state makes an old event harmless');
+  media.currentTime = 2; media.seeking = true; fire('seeking'); media.seeking = false; fire('seeked');
+  assert.equal(media.currentTime, 2);
+  assert.equal(media.paused, true, 'seeking to the start after playback advanced is a user seek');
   assert.equal(handlers.get('timeupdate').size, 0);
 });
 
