@@ -3,6 +3,35 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+/// Use nearest-nanosecond integers only to compare the interpolation budget.
+/// Output intervals retain the original floating-point recognition seconds.
+fn interpolation_width(lower: f64, upper: Option<f64>, count: usize) -> Result<f64> {
+    let ticks = |seconds: f64| -> Result<u64> {
+        let value = seconds * 1_000_000_000.0;
+        ensure!(
+            seconds.is_finite() && seconds >= 0.0 && value.is_finite() && value < u64::MAX as f64,
+            "補間する歌詞の時刻が不正です。"
+        );
+        Ok(value.round() as u64)
+    };
+    let lower_ticks = ticks(lower)?;
+    ensure!(count > 0, "補間する歌詞がありません。");
+    let Some(upper) = upper else {
+        return Ok(0.04);
+    };
+    let available = ticks(upper)?
+        .checked_sub(lower_ticks)
+        .context("補間する歌詞の時間が足りません。時刻付き歌詞で修正してください。")?;
+    let required = u64::try_from(count)?
+        .checked_mul(2_000_000)
+        .context("補間する歌詞が多すぎます。")?;
+    ensure!(
+        available >= required,
+        "補間する歌詞の時間が足りません。時刻付き歌詞で修正してください。"
+    );
+    Ok(((upper - lower) / count as f64).min(0.04))
+}
+
 /// Match a supplied lyric to acoustically timed Whisper tokens; retain match confidence.
 pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> Result<Vec<Word>> {
     let chars: Vec<char> = reference
@@ -38,8 +67,22 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             if text.starts_with("[_") {
                 continue;
             }
-            let from = token["offsets"]["from"].as_f64().unwrap_or(0.0) / 1000.0;
-            let to = token["offsets"]["to"].as_f64().unwrap_or(from * 1000.0) / 1000.0;
+            let letters: Vec<char> = text
+                .chars()
+                .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+                .collect();
+            if letters.is_empty() {
+                continue;
+            }
+            let from = token["offsets"]["from"].as_f64().unwrap_or(f64::NAN) / 1000.0;
+            let to = token["offsets"]["to"].as_f64().unwrap_or(f64::NAN) / 1000.0;
+            if !from.is_finite() || !to.is_finite() || from < 0.0 || to <= from {
+                // Keep the text correspondence, but no invented positive timing.
+                // Whisper can emit zero-length extra tokens that the reference
+                // does not use. Only adopting such a token makes timing invalid.
+                timed.extend(letters.into_iter().map(|c| (c, f64::NAN, f64::NAN)));
+                continue;
+            }
             let dtw = token["t_dtw"]
                 .as_f64()
                 .filter(|&v| v >= 0.0)
@@ -47,10 +90,6 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             let center = dtw
                 .filter(|&point| point >= from && point <= to)
                 .unwrap_or((from + to) / 2.0);
-            let letters: Vec<char> = text
-                .chars()
-                .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
-                .collect();
             for (index, &c) in letters.iter().enumerate() {
                 let span = (to - from).max(0.02);
                 let start = (center - span / 2.0).max(from).max(0.0);
@@ -69,17 +108,25 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         "歌詞と認識結果が空か長すぎます。"
     );
     let columns = timed.len() + 1;
+    // Maximize text correspondence first, then prefer real timing over an
+    // otherwise equivalent match to an extra zero-length token.
+    let match_weight = chars.len() as u32 + 1;
     let mut score = vec![0u32; (chars.len() + 1) * columns];
     for i in 1..=chars.len() {
         for j in 1..=timed.len() {
-            score[i * columns + j] = if chars[i - 1]
+            let matched = if chars[i - 1]
                 .to_lowercase()
                 .eq(timed[j - 1].0.to_lowercase())
             {
-                score[(i - 1) * columns + j - 1] + 1
+                score[(i - 1) * columns + j - 1]
+                    + match_weight
+                    + u32::from(timed[j - 1].1.is_finite())
             } else {
-                score[(i - 1) * columns + j].max(score[i * columns + j - 1])
+                0
             };
+            score[i * columns + j] = matched
+                .max(score[(i - 1) * columns + j])
+                .max(score[i * columns + j - 1]);
         }
     }
     let mut mapped = vec![None; chars.len()];
@@ -88,6 +135,10 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         if chars[i - 1]
             .to_lowercase()
             .eq(timed[j - 1].0.to_lowercase())
+            && score[i * columns + j]
+                == score[(i - 1) * columns + j - 1]
+                    + match_weight
+                    + u32::from(timed[j - 1].1.is_finite())
         {
             mapped[i - 1] = Some(j - 1);
             i -= 1;
@@ -103,43 +154,73 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
         matches as f64 / chars.len() as f64 > 0.3,
         "歌詞と歌声の対応が少なすぎます。時刻付き歌詞で修正してください。"
     );
-    let mut intervals = vec![(0.0f64, 0.0f64); chars.len()];
-    for n in 0..chars.len() {
-        intervals[n] = if let Some(k) = mapped[n] {
-            (timed[k].1, timed[k].2)
-        } else {
-            let previous = (0..n)
-                .rev()
-                .filter(|&p| line_indices[p] == line_indices[n])
-                .find_map(|p| mapped[p].map(|k| (p, timed[k].2)));
-            let following = (n + 1..chars.len())
-                .filter(|&p| line_indices[p] == line_indices[n])
-                .find_map(|p| mapped[p].map(|k| (p, timed[k].1)));
-            match (previous, following) {
-                (Some((a, t0)), Some((b, t1))) => {
-                    let width = ((t1 - t0) / (b - a) as f64).max(0.002);
-                    let start = t0 + width * (n - a - 1) as f64;
-                    (start, start + width)
-                }
-                (Some((a, t)), None) => {
-                    let start = t + 0.04 * (n - a - 1) as f64;
-                    (start, start + 0.04)
-                }
-                (None, Some((b, t))) => {
-                    let start = (t - 0.04 * (b - n) as f64).max(0.0);
-                    (start, start + 0.04)
-                }
-                _ => anyhow::bail!(
-                    "音声へ合わせられない歌詞の行があります。時刻付き歌詞で修正してください。"
-                ),
-            }
-        };
-        if n > 0 {
-            intervals[n].0 = intervals[n].0.max(intervals[n - 1].0 + 0.002);
+    ensure!(
+        mapped.iter().flatten().all(|&k| timed[k].1.is_finite()
+            && timed[k].2.is_finite()
+            && timed[k].1 >= 0.0
+            && timed[k].2 > timed[k].1),
+        "認識した歌詞の時刻が不正です。時刻付き歌詞で修正してください。"
+    );
+    let recognized_lines: std::collections::BTreeSet<_> = mapped
+        .iter()
+        .enumerate()
+        .filter_map(|(n, token)| token.map(|_| line_indices[n]))
+        .collect();
+    ensure!(
+        line_indices
+            .iter()
+            .all(|line| recognized_lines.contains(line)),
+        "音声へ合わせられない歌詞の行があります。時刻付き歌詞で修正してください。"
+    );
+    let mut intervals: Vec<_> = mapped
+        .iter()
+        .map(|token| token.map_or((f64::NAN, f64::NAN), |k| (timed[k].1, timed[k].2)))
+        .collect();
+    let mut first = 0;
+    while first < chars.len() {
+        if mapped[first].is_some() {
+            first += 1;
+            continue;
         }
-        intervals[n].1 = intervals[n].1.max(intervals[n].0 + 0.002);
+        let mut last = first + 1;
+        while last < chars.len() && mapped[last].is_none() {
+            last += 1;
+        }
+        let count = last - first;
+        let lower = if first == 0 {
+            0.0
+        } else {
+            intervals[first - 1].1
+        };
+        let upper = (last < chars.len()).then(|| intervals[last].0);
+        let width = interpolation_width(lower, upper, count)?;
+        // Keep every adopted recognition time intact. Only confidence-zero
+        // estimates fit the known gap; a leading estimate ends at its anchor.
+        let leading = first == 0 || line_indices[first - 1] != line_indices[first];
+        let base = if leading {
+            upper.unwrap() - width * count as f64
+        } else {
+            lower
+        };
+        for (index, interval) in intervals[first..last].iter_mut().enumerate() {
+            *interval = (
+                (base + width * index as f64).max(lower),
+                upper.map_or(base + width * (index + 1) as f64, |bound| {
+                    (base + width * (index + 1) as f64).min(bound)
+                }),
+            );
+        }
+        first = last;
     }
-    Ok(chars
+    ensure!(
+        intervals.iter().all(|&(start, end)| start.is_finite()
+            && end.is_finite()
+            && start >= 0.0
+            && end > start)
+            && intervals.windows(2).all(|pair| pair[0].0 <= pair[1].0),
+        "認識した歌詞の時刻が不正です。時刻付き歌詞で修正してください。"
+    );
+    let words: Vec<Word> = chars
         .into_iter()
         .enumerate()
         .map(|(n, c)| Word {
@@ -150,7 +231,18 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             join_previous: joins[n],
             line_index: line_indices[n],
         })
-        .collect())
+        .collect();
+    // Use the same display groups as ASS and LRC, including splits inside long
+    // reference lines. Every token in the group contributes to its end time.
+    let mut previous_end = 0.0;
+    for group in crate::lyrics::word_groups(&words) {
+        ensure!(
+            words[group.start].start >= previous_end,
+            "認識した歌詞の表示区間が時間的に重複しています。時刻付き歌詞で修正してください。"
+        );
+        previous_end = words[group].iter().map(|word| word.end).fold(0.0, f64::max);
+    }
+    Ok(words)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -765,6 +857,215 @@ mod tests {
         assert!(words.windows(2).all(|w| w[0].start <= w[1].start));
         assert!(reference_to_whisper("ほげほげ", &data).is_err());
     }
+    #[test]
+    fn whisper_reference_rejects_overlapping_lines_and_invalid_token_bounds() {
+        let normal = serde_json::json!({"transcription":[{"tokens":[
+            {"text":"あ","offsets":{"from":1000,"to":1400},"p":0.9},
+            {"text":"い","offsets":{"from":1500,"to":1900},"p":0.9}
+        ]}]});
+        let words = reference_to_whisper("あ\nい", &normal).unwrap();
+        assert_eq!(words.len(), 2);
+        assert_eq!(
+            (words[0].start, words[0].end, words[1].start, words[1].end),
+            (1.0, 1.4, 1.5, 1.9)
+        );
+        let lrc = crate::lyrics::to_lrc(&crate::lyrics::word_cues(&words));
+        let cues = crate::lyrics::parse_lrc(&lrc).unwrap();
+        assert_eq!(
+            cues.iter().map(|cue| cue.seconds).collect::<Vec<_>>(),
+            [1.0, 1.4, 1.5, 1.9]
+        );
+        let mut overlap = normal.clone();
+        overlap["transcription"][0]["tokens"][0]["offsets"]["to"] = serde_json::json!(1700);
+        assert!(
+            reference_to_whisper("あ\nい", &overlap)
+                .unwrap_err()
+                .to_string()
+                .contains("重複"),
+            "different lyric lines must not produce simultaneous ASS events while LRC replaces the first line"
+        );
+        assert!(
+            reference_to_whisper("あい", &overlap).is_ok(),
+            "overlapping token spans inside one displayed line are retained"
+        );
+        for bounds in [
+            serde_json::json!({"from":-100,"to":100}),
+            serde_json::json!({"from":1000,"to":1000}),
+            serde_json::json!({"from":1000,"to":500}),
+            serde_json::json!({"from":1000}),
+            serde_json::json!({"to":1400}),
+        ] {
+            let mut invalid = normal.clone();
+            invalid["transcription"][0]["tokens"][0]["offsets"] = bounds;
+            assert!(
+                reference_to_whisper("あ\nい", &invalid)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("時刻"),
+                "invalid token boundaries must not be invented as positive timing"
+            );
+        }
+    }
+
+    #[test]
+    fn unused_zero_length_token_does_not_discard_valid_reference_timing() {
+        let normal = serde_json::json!({"transcription":[{"tokens":[
+            {"text":"あ","offsets":{"from":1000,"to":1400}},
+            {"text":"い","offsets":{"from":1500,"to":1900}}
+        ]}]});
+        let expected = reference_to_whisper("あ\nい", &normal).unwrap();
+        let mut with_extra = normal;
+        with_extra["transcription"][0]["tokens"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"text":"ん","offsets":{"from":2000,"to":2000}}));
+        let actual = reference_to_whisper("あ\nい", &with_extra).unwrap();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        with_extra["transcription"][0]["tokens"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"text":"い","offsets":{"from":2000,"to":2000}}));
+        let preferred = reference_to_whisper("あ\nい", &with_extra).unwrap();
+        assert_eq!(
+            (preferred[1].start, preferred[1].end),
+            (1.5, 1.9),
+            "valid full correspondence wins over a duplicate zero-length token"
+        );
+    }
+
+    #[test]
+    fn split_reference_line_rejects_overlapping_display_intervals() {
+        let data = serde_json::json!({"transcription":[{"tokens":[
+            {"text":"あ","offsets":{"from":1000,"to":1500}},
+            {"text":"い","offsets":{"from":3000,"to":7000}},
+            {"text":"う","offsets":{"from":5000,"to":5500}},
+            {"text":"え","offsets":{"from":6000,"to":6500}}
+        ]}]});
+        assert!(
+            reference_to_whisper("あいう\nえ", &data).is_err(),
+            "4-second display split must not let the long preceding token overlap a later event"
+        );
+        let characters: String = (0..37)
+            .map(|n| char::from_u32(0x3041 + n).unwrap())
+            .collect();
+        let char_tokens: Vec<_> = characters.chars().enumerate().map(|(n,c)|{
+            let start = 1000+n*10;
+            serde_json::json!({"text":c.to_string(),"offsets":{"from":start,"to":if n==0 { 3000 } else { start+5 }}})
+        }).collect();
+        assert!(
+            reference_to_whisper(
+                &characters,
+                &serde_json::json!({"transcription":[{"tokens":char_tokens}]})
+            )
+            .is_err(),
+            "character-limit split must use the full preceding interval end"
+        );
+    }
+
+    #[test]
+    fn interpolated_line_edges_fit_between_adopted_tokens_without_moving_them() {
+        let data = serde_json::json!({"transcription":[{"tokens":[
+            {"text":"あ","offsets":{"from":1000,"to":1300}},
+            {"text":"い","offsets":{"from":1300,"to":1600}},
+            {"text":"え","offsets":{"from":1620,"to":1900}},
+            {"text":"お","offsets":{"from":1900,"to":2200}}
+        ]}]});
+        let recognized = reference_to_whisper("あい\nえお", &data).unwrap();
+        for reference in ["あいう\nえお", "あい\nうえお"] {
+            let words = reference_to_whisper(reference, &data).unwrap();
+            assert_eq!(words.len(), 5);
+            assert_eq!(
+                (words[1].start, words[1].end),
+                (recognized[1].start, recognized[1].end)
+            );
+            assert_eq!(
+                (words[3].start, words[3].end),
+                (recognized[2].start, recognized[2].end)
+            );
+            assert_eq!(words[2].confidence, 0.0);
+            assert!(words[2].start >= 1.6 && words[2].end <= 1.62);
+            let groups: Vec<_> = crate::lyrics::word_groups(&words).collect();
+            assert_eq!(groups.len(), 2);
+            let end = words[groups[0].clone()]
+                .iter()
+                .map(|word| word.end)
+                .fold(0.0, f64::max);
+            assert!(end <= words[groups[1].start].start);
+        }
+        let mut overlap = data.clone();
+        overlap["transcription"][0]["tokens"][1]["offsets"]["to"] = serde_json::json!(1700);
+        assert!(reference_to_whisper("あい\nえお", &overlap).is_err());
+        for reference in ["あいうう\nえお", "あい\nううえお"] {
+            let words = reference_to_whisper(reference, &data).unwrap();
+            assert_eq!(words.len(), 6);
+            assert!((words[2].start - 1.6).abs() < 1e-12);
+            assert!(words[3].end <= 1.62);
+            assert_eq!(
+                (words[4].start, words[4].end),
+                (recognized[2].start, recognized[2].end)
+            );
+        }
+        for next in [1600, 1601] {
+            let mut no_gap = data.clone();
+            no_gap["transcription"][0]["tokens"][2]["offsets"]["from"] = serde_json::json!(next);
+            assert!(reference_to_whisper("あいう\nえお", &no_gap).is_err());
+        }
+        for (gap, missing) in [(2, "う"), (4, "うう")] {
+            let mut exact = data.clone();
+            exact["transcription"][0]["tokens"][1]["offsets"]["to"] = serde_json::json!(2000);
+            exact["transcription"][0]["tokens"][2]["offsets"]["from"] =
+                serde_json::json!(2000 + gap);
+            exact["transcription"][0]["tokens"][2]["offsets"]["to"] = serde_json::json!(2300);
+            exact["transcription"][0]["tokens"][3]["offsets"]["from"] = serde_json::json!(2300);
+            exact["transcription"][0]["tokens"][3]["offsets"]["to"] = serde_json::json!(2600);
+            let exact_baseline = reference_to_whisper("あい\nえお", &exact).unwrap();
+            let words = reference_to_whisper(&format!("あい{missing}\nえお"), &exact).unwrap();
+            assert_eq!(words[1].end, 2.0);
+            assert_eq!(
+                words[2 + missing.chars().count()].start,
+                exact_baseline[2].start
+            );
+            let mut insufficient = exact;
+            insufficient["transcription"][0]["tokens"][2]["offsets"]["from"] =
+                serde_json::json!(1999 + gap);
+            assert!(reference_to_whisper(&format!("あい{missing}\nえお"), &insufficient).is_err());
+        }
+        let mut leading = data.clone();
+        leading["transcription"][0]["tokens"][0]["offsets"]["from"] = serde_json::json!(10);
+        assert!(reference_to_whisper("うあい\nえお", &leading).is_ok());
+        let mut insufficient_leading = leading.clone();
+        insufficient_leading["transcription"][0]["tokens"][0]["offsets"]["from"] =
+            serde_json::json!(1);
+        assert!(reference_to_whisper("うあい\nえお", &insufficient_leading).is_err());
+        let trailing = reference_to_whisper("あい\nえおう", &data).unwrap();
+        assert_eq!(trailing.last().unwrap().confidence, 0.0);
+        assert!(trailing.last().unwrap().end > recognized.last().unwrap().end);
+    }
+
+    #[test]
+    fn interpolation_budget_has_one_integer_precision_and_keeps_output_seconds() {
+        for lower in [0.0, 1.6, 2.0, 899.0] {
+            for count in [1, 2, 3] {
+                let exact = lower + 0.002 * count as f64;
+                assert!(interpolation_width(lower, Some(exact), count).is_ok());
+                assert!(interpolation_width(lower, Some(exact - 0.000001), count).is_err());
+                let upper = exact + 0.000001;
+                assert_eq!(
+                    interpolation_width(lower, Some(upper), count).unwrap(),
+                    (upper - lower) / count as f64
+                );
+            }
+        }
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, f64::MAX] {
+            assert!(interpolation_width(invalid, Some(2.0), 1).is_err());
+            assert!(interpolation_width(1.0, Some(invalid), 1).is_err());
+        }
+        assert!(interpolation_width(1.0, Some(2.0), 0).is_err());
+    }
+
     #[test]
     fn line_silence_keeps_recognized_start_and_cancel_stops_viterbi() {
         let data = serde_json::json!({"transcription":[{"tokens":[{"text":"あ","offsets":{"from":1000,"to":1200},"t_dtw":110},{"text":"い","offsets":{"from":10000,"to":10200},"t_dtw":1010}]}]});
