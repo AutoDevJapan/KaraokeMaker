@@ -3,6 +3,35 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+/// Use nearest-nanosecond integers only to compare the interpolation budget.
+/// Output intervals retain the original floating-point recognition seconds.
+fn interpolation_width(lower: f64, upper: Option<f64>, count: usize) -> Result<f64> {
+    let ticks = |seconds: f64| -> Result<u64> {
+        let value = seconds * 1_000_000_000.0;
+        ensure!(
+            seconds.is_finite() && seconds >= 0.0 && value.is_finite() && value < u64::MAX as f64,
+            "補間する歌詞の時刻が不正です。"
+        );
+        Ok(value.round() as u64)
+    };
+    let lower_ticks = ticks(lower)?;
+    ensure!(count > 0, "補間する歌詞がありません。");
+    let Some(upper) = upper else {
+        return Ok(0.04);
+    };
+    let available = ticks(upper)?
+        .checked_sub(lower_ticks)
+        .context("補間する歌詞の時間が足りません。時刻付き歌詞で修正してください。")?;
+    let required = u64::try_from(count)?
+        .checked_mul(2_000_000)
+        .context("補間する歌詞が多すぎます。")?;
+    ensure!(
+        available >= required,
+        "補間する歌詞の時間が足りません。時刻付き歌詞で修正してください。"
+    );
+    Ok(((upper - lower) / count as f64).min(0.04))
+}
+
 /// Match a supplied lyric to acoustically timed Whisper tokens; retain match confidence.
 pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> Result<Vec<Word>> {
     let chars: Vec<char> = reference
@@ -164,16 +193,7 @@ pub fn reference_to_whisper(reference: &str, transcript: &serde_json::Value) -> 
             intervals[first - 1].1
         };
         let upper = (last < chars.len()).then(|| intervals[last].0);
-        let width = if let Some(upper) = upper {
-            let available = upper - lower;
-            ensure!(
-                available.is_finite() && available >= count as f64 * 0.002,
-                "補間する歌詞の時間が足りません。時刻付き歌詞で修正してください。"
-            );
-            (available / count as f64).min(0.04)
-        } else {
-            0.04
-        };
+        let width = interpolation_width(lower, upper, count)?;
         // Keep every adopted recognition time intact. Only confidence-zero
         // estimates fit the known gap; a leading estimate ends at its anchor.
         let leading = first == 0 || line_indices[first - 1] != line_indices[first];
@@ -993,6 +1013,26 @@ mod tests {
             no_gap["transcription"][0]["tokens"][2]["offsets"]["from"] = serde_json::json!(next);
             assert!(reference_to_whisper("あいう\nえお", &no_gap).is_err());
         }
+        for (gap, missing) in [(2, "う"), (4, "うう")] {
+            let mut exact = data.clone();
+            exact["transcription"][0]["tokens"][1]["offsets"]["to"] = serde_json::json!(2000);
+            exact["transcription"][0]["tokens"][2]["offsets"]["from"] =
+                serde_json::json!(2000 + gap);
+            exact["transcription"][0]["tokens"][2]["offsets"]["to"] = serde_json::json!(2300);
+            exact["transcription"][0]["tokens"][3]["offsets"]["from"] = serde_json::json!(2300);
+            exact["transcription"][0]["tokens"][3]["offsets"]["to"] = serde_json::json!(2600);
+            let exact_baseline = reference_to_whisper("あい\nえお", &exact).unwrap();
+            let words = reference_to_whisper(&format!("あい{missing}\nえお"), &exact).unwrap();
+            assert_eq!(words[1].end, 2.0);
+            assert_eq!(
+                words[2 + missing.chars().count()].start,
+                exact_baseline[2].start
+            );
+            let mut insufficient = exact;
+            insufficient["transcription"][0]["tokens"][2]["offsets"]["from"] =
+                serde_json::json!(1999 + gap);
+            assert!(reference_to_whisper(&format!("あい{missing}\nえお"), &insufficient).is_err());
+        }
         let mut leading = data.clone();
         leading["transcription"][0]["tokens"][0]["offsets"]["from"] = serde_json::json!(10);
         assert!(reference_to_whisper("うあい\nえお", &leading).is_ok());
@@ -1003,6 +1043,27 @@ mod tests {
         let trailing = reference_to_whisper("あい\nえおう", &data).unwrap();
         assert_eq!(trailing.last().unwrap().confidence, 0.0);
         assert!(trailing.last().unwrap().end > recognized.last().unwrap().end);
+    }
+
+    #[test]
+    fn interpolation_budget_has_one_integer_precision_and_keeps_output_seconds() {
+        for lower in [0.0, 1.6, 2.0, 899.0] {
+            for count in [1, 2, 3] {
+                let exact = lower + 0.002 * count as f64;
+                assert!(interpolation_width(lower, Some(exact), count).is_ok());
+                assert!(interpolation_width(lower, Some(exact - 0.000001), count).is_err());
+                let upper = exact + 0.000001;
+                assert_eq!(
+                    interpolation_width(lower, Some(upper), count).unwrap(),
+                    (upper - lower) / count as f64
+                );
+            }
+        }
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, f64::MAX] {
+            assert!(interpolation_width(invalid, Some(2.0), 1).is_err());
+            assert!(interpolation_width(1.0, Some(invalid), 1).is_err());
+        }
+        assert!(interpolation_width(1.0, Some(2.0), 0).is_err());
     }
 
     #[test]
