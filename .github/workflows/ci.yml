@@ -17,7 +17,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fontconfig fonts-noto-cjk
+      - run: bash .github/scripts/install-ubuntu-deps.sh ffmpeg fontconfig fonts-noto-cjk
       - name: Record Japanese font fallback
         run: fc-match -f '%{family}\n' 'sans-serif:lang=ja'
       - uses: actions/setup-node@v4

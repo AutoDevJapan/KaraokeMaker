@@ -799,6 +799,88 @@ pub(crate) fn retime_vocals(dir: &Path, tempo: f64, progress: &Progress) -> Resu
     )
 }
 
+fn subtract_vocals(tools: &Tools, input: &Path, dir: &Path, progress: &Progress) -> Result<()> {
+    let destination = dir.join("instrumental-raw.wav");
+    ensure!(
+        !destination.try_exists()?,
+        "出力先にinstrumental-raw.wavがすでにあります。別のフォルダを使ってください。"
+    );
+    let stage = dir.join(format!("residual-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&stage)?;
+    let temporary = stage.join("instrumental.wav");
+    // amix takes absolute weights with normalize=0; invert the samples explicitly.
+    let result = run(
+        tools,
+        dir,
+        &[
+            "-protocol_whitelist".into(),
+            "file,pipe".into(),
+            "-i".into(),
+            input.display().to_string(),
+            "-i".into(),
+            "vocals.wav".into(),
+            "-filter_complex".into(),
+            "[0:a:0]aresample=48000:async=1:first_pts=0[a];[1:a:0]aresample=48000,volume=-1[v];[a][v]amix=inputs=2:normalize=0:duration=first".into(),
+            "-vn".into(),
+            "-ac".into(),
+            "2".into(),
+            "-c:a".into(),
+            "pcm_f32le".into(),
+            temporary.display().to_string(),
+        ],
+        progress,
+    )
+    .and_then(|()| publish_residual(&temporary, &destination));
+    let cleanup = (|| -> std::io::Result<()> {
+        match fs::remove_file(&temporary) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
+        }
+        fs::remove_dir(&stage)
+    })();
+    match (result, cleanup) {
+        (result, Ok(())) => result,
+        (Ok(()), Err(error)) => bail!(
+            "作業用音源を回収できませんでした: {}: {error}",
+            stage.display()
+        ),
+        (Err(error), Err(cleanup)) => Err(error.context(format!(
+            "作業用音源を回収できませんでした: {}: {cleanup}",
+            stage.display()
+        ))),
+    }
+}
+
+fn publish_residual(temporary: &Path, destination: &Path) -> Result<()> {
+    let reader = hound::WavReader::open(temporary)?;
+    ensure!(
+        reader.spec().sample_rate == 48000
+            && reader.spec().channels == 2
+            && reader.spec().sample_format == hound::SampleFormat::Float
+            && reader.duration() > 0,
+        "今回の伴奏を生成できませんでした。"
+    );
+    drop(reader);
+    // Non-replacing publication also rejects a destination created after the precheck.
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{Win32::Storage::FileSystem::MoveFileW, core::PCWSTR};
+        let source: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        // MoveFileW does not replace an existing target and works on exFAT too.
+        unsafe { MoveFileW(PCWSTR(source.as_ptr()), PCWSTR(target.as_ptr())) }?;
+    }
+    #[cfg(not(windows))]
+    fs::hard_link(temporary, destination)?;
+    Ok(())
+}
+
 pub fn convert(
     input: &Path,
     dir: &Path,
@@ -849,12 +931,7 @@ pub fn convert(
             | crate::model::SeparationModel::MelBandFp16
             | crate::model::SeparationModel::FineTunedResidual
     ) {
-        run(&tools, &dir, &[
-            "-protocol_whitelist".into(),"file,pipe".into(),"-i".into(),input.display().to_string(),
-            "-i".into(),"vocals.wav".into(),"-filter_complex".into(),
-            "[0:a:0]aresample=48000:async=1:first_pts=0[a];[1:a:0]aresample=48000[v];[a][v]amix=inputs=2:weights='1 -1':normalize=0:duration=first".into(),
-            "-vn".into(),"-ac".into(),"2".into(),"-c:a".into(),"pcm_f32le".into(),"instrumental-raw.wav".into(),
-        ],progress)?;
+        subtract_vocals(&tools, &input, &dir, progress)?;
     } else {
         write_stereo(
             &dir.join("instrumental-raw.wav"),
@@ -913,4 +990,210 @@ pub fn convert(
     }
     progress.set("音源と映像ができました。");
     Ok(())
+}
+
+#[cfg(test)]
+mod residual_tests {
+    use super::*;
+
+    fn wave(path: &Path, rate: u32, seconds: f64, left: f32, right: f32) {
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).unwrap();
+        for _ in 0..(rate as f64 * seconds) as usize {
+            writer.write_sample(left).unwrap();
+            writer.write_sample(right).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    fn residual(dir: &Path) -> Vec<f32> {
+        let mut reader = hound::WavReader::open(dir.join("instrumental-raw.wav")).unwrap();
+        assert_eq!(reader.spec().sample_rate, 48000);
+        assert_eq!(reader.spec().channels, 2);
+        reader
+            .samples::<f32>()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn identical_vocals_cancel_in_the_actual_residual_filter() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("source.wav");
+        wave(&input, 44100, 0.2, 0.25, -0.375);
+        fs::copy(&input, temp.path().join("vocals.wav")).unwrap();
+        let before = fs::read(&input).unwrap();
+        subtract_vocals(
+            &Tools::discover(),
+            &input,
+            temp.path(),
+            &Progress::default(),
+        )
+        .unwrap();
+        let samples = residual(temp.path());
+        assert_eq!(samples.len(), 9600 * 2);
+        let maximum = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+        assert!(
+            maximum < 1e-6,
+            "identical vocals must cancel, max residual={maximum}"
+        );
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+
+    #[test]
+    fn residual_keeps_signed_amplitude_rates_and_first_input_duration() {
+        for (source_duration, vocal_duration) in [(0.2, 0.1), (0.1, 0.2)] {
+            let temp = tempfile::tempdir().unwrap();
+            let input = temp.path().join("source.wav");
+            wave(&input, 48000, source_duration, 1.25, -1.125);
+            wave(
+                &temp.path().join("vocals.wav"),
+                44100,
+                vocal_duration,
+                0.75,
+                -0.375,
+            );
+            let before = fs::read(&input).unwrap();
+            let vocal_before = fs::read(temp.path().join("vocals.wav")).unwrap();
+            subtract_vocals(
+                &Tools::discover(),
+                &input,
+                temp.path(),
+                &Progress::default(),
+            )
+            .unwrap();
+            let samples = residual(temp.path());
+            assert_eq!(samples.len(), (source_duration * 48000.0) as usize * 2);
+            assert!((samples[480 * 2] - 0.5).abs() < 1e-5);
+            assert!((samples[480 * 2 + 1] + 0.75).abs() < 1e-5);
+            if source_duration > vocal_duration {
+                assert!(
+                    (samples[7200 * 2] - 1.25).abs() < 1e-5,
+                    "no clipping or gain change after the vocal ends"
+                );
+                assert!((samples[7200 * 2 + 1] + 1.125).abs() < 1e-5);
+            }
+            assert_eq!(fs::read(&input).unwrap(), before);
+            assert_eq!(
+                fs::read(temp.path().join("vocals.wav")).unwrap(),
+                vocal_before
+            );
+        }
+    }
+
+    #[test]
+    fn residual_normalizes_source_pts_and_preserves_existing_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let tools = Tools::discover();
+        let source = temp.path().join("source.wav");
+        wave(&source, 48000, 0.2, 0.5, -0.5);
+        let input = temp.path().join("timed.nut");
+        let status = hidden_command(&tools.ffmpeg)
+            .args(["-nostdin", "-v", "error", "-i"])
+            .arg(&source)
+            .args(["-af", "asetpts=PTS+0.05/TB", "-c:a", "pcm_f32le"])
+            .arg(&input)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let normalized = temp.path().join("normalized");
+        fs::create_dir(&normalized).unwrap();
+        let (decoded_left, decoded_right) =
+            decode(&tools, &input, &normalized, &Progress::default()).unwrap();
+        wave(&temp.path().join("vocals.wav"), 44100, 0.25, 0.125, -0.125);
+        let before = fs::read(&input).unwrap();
+        subtract_vocals(&tools, &input, temp.path(), &Progress::default()).unwrap();
+        let samples = residual(temp.path());
+        // FFmpeg rebases this container's +50ms start before first_pts=0.
+        assert_eq!(decoded_left.len(), 8820);
+        assert_eq!(samples.len(), 9600 * 2);
+        assert!((decoded_left[441] - 0.5).abs() < 1e-5);
+        assert!((decoded_right[441] + 0.5).abs() < 1e-5);
+        assert!((samples[480 * 2] - 0.375).abs() < 1e-5);
+        assert!((samples[480 * 2 + 1] + 0.375).abs() < 1e-5);
+        assert!((samples[4800 * 2] - 0.375).abs() < 1e-5);
+        assert!((samples[4800 * 2 + 1] + 0.375).abs() < 1e-5);
+        let output = fs::read(temp.path().join("instrumental-raw.wav")).unwrap();
+        assert!(subtract_vocals(&tools, &input, temp.path(), &Progress::default()).is_err());
+        assert_eq!(
+            fs::read(temp.path().join("instrumental-raw.wav")).unwrap(),
+            output
+        );
+        assert_eq!(fs::read(&input).unwrap(), before);
+        assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("residual-")
+        }));
+    }
+
+    #[test]
+    fn residual_publication_rejects_competing_output_and_invalid_generation() {
+        let temp = tempfile::tempdir().unwrap();
+        let generated = temp.path().join("generated.wav");
+        let destination = temp.path().join("destination.wav");
+        wave(&generated, 48000, 0.1, 0.25, -0.25);
+        fs::write(&destination, b"competing original").unwrap();
+        assert!(publish_residual(&generated, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"competing original");
+        fs::remove_file(&destination).unwrap();
+        fs::write(&generated, b"invalid generated media").unwrap();
+        assert!(publish_residual(&generated, &destination).is_err());
+        assert!(!destination.exists());
+        let input = temp.path().join("invalid.wav");
+        fs::write(&input, b"invalid input").unwrap();
+        wave(&temp.path().join("vocals.wav"), 44100, 0.1, 0.25, -0.25);
+        assert!(
+            subtract_vocals(
+                &Tools::discover(),
+                &input,
+                temp.path(),
+                &Progress::default()
+            )
+            .is_err()
+        );
+        assert!(!temp.path().join("instrumental-raw.wav").exists());
+        assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("residual-")
+        }));
+    }
+
+    #[test]
+    fn residual_concurrent_publication_has_one_winner_without_overwrite() {
+        use std::sync::{Arc, Barrier};
+        let temp = tempfile::tempdir().unwrap();
+        let source_a = temp.path().join("a.wav");
+        let source_b = temp.path().join("b.wav");
+        let destination = temp.path().join("destination.wav");
+        wave(&source_a, 48000, 0.1, 0.25, -0.25);
+        wave(&source_b, 48000, 0.1, 0.5, -0.5);
+        let a = fs::read(&source_a).unwrap();
+        let b = fs::read(&source_b).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let one = scope.spawn(|| {
+                barrier.wait();
+                publish_residual(&source_a, &destination).is_ok()
+            });
+            let two = scope.spawn(|| {
+                barrier.wait();
+                publish_residual(&source_b, &destination).is_ok()
+            });
+            [one.join().unwrap(), two.join().unwrap()]
+        });
+        assert_eq!(results.into_iter().filter(|success| *success).count(), 1);
+        let output = fs::read(&destination).unwrap();
+        assert!(output == a || output == b);
+    }
 }
