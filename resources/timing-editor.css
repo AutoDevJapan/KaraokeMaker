@@ -1,0 +1,29 @@
+.timing-editor { margin: 28px 0; }
+body:has(.timing-editor) main { max-width: 1380px; }
+.timing-workspace { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: 24px; align-items: start; }
+.timing-workspace video { margin: 0; max-height: 520px; aspect-ratio: 16/9; }
+.timing-editor .panel { margin: 0; }
+.timing-editor h2 { margin-top: 0; }
+.timing-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.timing-time { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+.timing-time button { padding: 10px 12px; white-space: nowrap; }
+.timing-editor input[aria-invalid=true] { border: 2px solid #a46226; }
+.timing-selection { white-space: pre-wrap; overflow-wrap: anywhere; }
+.timing-table-wrap { border: 1px solid #91a997; border-radius: 8px; overflow: auto; max-height: 430px; background: #fffdf7; }
+.timing-table { width: 100%; border-collapse: collapse; min-width: 680px; }
+.timing-table th { text-align: left; position: sticky; top: 0; background: #f3f1e9; z-index: 1; }
+.timing-table td, .timing-table th { padding: 10px; border-bottom: 1px solid #c9cdc2; vertical-align: middle; }
+.timing-table td:nth-child(2) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.timing-table td:nth-child(3) { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 300px; }
+.timing-table td:first-child { width: 68px; }
+.timing-table button { padding: 8px 12px; }
+.timing-table tr.selected { background: #cfe3c3; }
+.timing-table tr.playing td:nth-child(3) { color: #214e37; font-weight: 700; }
+.timing-bar-cell { position: relative; width: 42%; min-width: 220px; background: linear-gradient(90deg, transparent calc(var(--playhead,0%) - 1px), #bf8138 var(--playhead,0%), transparent calc(var(--playhead,0%) + 1px)); }
+.timing-bar { display: block; position: relative; height: 24px; border-radius: 5px; background: #418653; }
+.timing-player { display: flex; gap: 16px; align-items: center; margin: 16px 0; }
+.timing-clock { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+.timing-editor button:disabled { opacity: .55; cursor: default; }
+.timing-actions { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 20px 0; }
+.timing-actions .actions { margin: 0; }
+@media (max-width: 800px) { .timing-workspace { grid-template-columns: 1fr; } }
