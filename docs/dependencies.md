@@ -43,6 +43,8 @@ WindowsのONNX実行部品はMicrosoft.ML.OnnxRuntime.Gpu.Windows 1.24.4（MIT�
 
 字幕候補のwhisper.cpp 1.9.2はMIT。ggml-large-v3-turbo-q5_0.binは574,041,195 bytes。英語CTCは [onnx-community/wav2vec2-base-960h-ONNX](https://huggingface.co/onnx-community/wav2vec2-base-960h-ONNX) のrevision `729c1a6730fb549c20a1c73a3d3f96f11020225e`、95,212,816 bytes、SHA-256 `1d9a366c27b2966625cd5035ac3db8847c53bba617169912bb251b42975a3a22`。上流はApache-2.0。Windows OCRはOS機能を内部の字幕フレーム確認に使用。
 
+字幕候補の部品は[初回準備](runtime-setup.md)でアプリの選択した保存先に導入する。Whisperモデルは [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) revision `5359861c739e955e79d9a303bcbc70fb988958b1`、SHA-256 `394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2`。モデルのMIT原文はOpenAI Whisper commit `86098128c0b4f24f0e2aa2994de830614b474227`から保持する。Whisper Windows x64実行部品は[公式v1.9.2](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2)、commit `306c88f4d1286aec1bf96e544632897886af5501`、ZIPは8,194,445 bytes、SHA-256 `49dcc16de826f20bd53d44f947a1ae49dfa81f86cad67a64d80820cb192d674a`。同commitのMIT原文を保持する。CTCの語彙と変換版のREADME、Apache-2.0を宣言する原モデルのREADMEも固定して保存する。固定した取得元と各部品のハッシュは `resources/subtitle-assets.json` に記録し、モデルやSDKを製品ZIPには同梱しない。
+
 公式Windows yt-dlp 2026.08.19は本人曲の内部取得に使用。コアはUnlicense、依存を含む配布exeはGPLv3+の条件。ダウンローダーを製品へ同梱しない。
 
 DemucsのコードのMITとモデルの条件は異なる。作者は[モデルの条件について](https://github.com/facebookresearch/demucs/issues/327)研究目的に限ると説明している。配布ミラーのMIT表記だけで商用許可とせず、今回の比較評価に限定する。将来の受注にDemucsをそのまま使う前提を置かない。FT比較モデルは336,125,008 bytes、SHA-256 `255c2650d26537ce4887c9c4cf08c6d4896fad2fecc0b78dc5b875b117bcc575`。

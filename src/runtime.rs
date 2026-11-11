@@ -87,6 +87,14 @@ pub fn initialize_for_model(model: &std::path::Path, progress: &crate::Progress)
     let models = model
         .parent()
         .ok_or_else(|| anyhow::anyhow!("モデルの保存先を確認できません。"))?;
+    initialize_for_models(models, progress)
+}
+
+#[cfg(feature = "ort")]
+pub(crate) fn initialize_for_models(
+    models: &std::path::Path,
+    progress: &crate::Progress,
+) -> Result<()> {
     let local = crate::runtime_setup::local_root(models)?;
     if local.exists() {
         setup_runtime(models, progress)?;

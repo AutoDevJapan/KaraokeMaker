@@ -16,6 +16,7 @@ pub mod runtime;
 #[cfg(any(feature = "ort", test))]
 mod runtime_setup;
 pub mod spectral;
+mod subtitle_assets;
 pub mod suno;
 pub mod template;
 pub mod web;
