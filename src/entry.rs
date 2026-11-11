@@ -163,6 +163,7 @@ pub fn main() {
         .spawn(run)
         .expect("thread creation failed")
         .join();
+    crate::subtitle_assets::shutdown();
     match result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {

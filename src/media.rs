@@ -870,6 +870,7 @@ pub fn convert(
         let result = crate::alignment::prepare(
             &dir.join("vocals.wav"),
             &dir,
+            cache,
             &effective.lyrics,
             duration,
             progress,
