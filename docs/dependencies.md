@@ -33,6 +33,8 @@
 
 ## 音源分離と外部プログラム
 
+比較用Demucsの標準モデルは [htdemucs.safetensors](https://huggingface.co/set-soft/audio_separation/resolve/main/Demucs/htdemucs.safetensors)、84,030,696 bytes、SHA-256 `8193504cdfb3943adaf039b8acb524a46e87ebf232c383ac7a32c80a6578423e`。fine-tuned系は [htdemucs_ft.safetensors](https://huggingface.co/set-soft/audio_separation/resolve/main/Demucs/htdemucs_ft.safetensors)、336,125,008 bytes、SHA-256 `255c2650d26537ce4887c9c4cf08c6d4896fad2fecc0b78dc5b875b117bcc575`。これらの取得URLは `main` を参照しますが、使用する内容は `src/model.rs` の固定サイズとSHA-256で照合します。
+
 標準はKimのMel-Band RoFormer。fp16のONNXは [Ryan5453/unblend](https://huggingface.co/Ryan5453/unblend) のrevision `30b749fd691312b1e4b3f8fe79df0b51cde836cd`、473,549,669 bytes、SHA-256 `7600639eee90a7e2732b71af90618defac0cacaca5ddfed7b783babfdf8474bf`。原作者の[モデルカード](https://huggingface.co/KimberleyJSN/melbandroformer)はMITを宣言する。変換は利用条件を変更しない。
 
 比較用fp32は [santiquirozの変換](https://github.com/santiquiroz/port-bs-roformer-onnx/releases/tag/models-v1.0)、models-v1.0、931,054,408 bytes、SHA-256 `1b8afd7780d8a234527748821dee6bc746d346f2088751c12fd48e8c873f625a`。STFT/iSTFTはMITの参照実装と数式を確認してRustで実装した。smank変換953,292,899 bytes、SHA-256 `64a4f3bee48fbe7d971b23875adc924ed004c3533f49672592641dddc0f6f561`も評価したが不採用。
