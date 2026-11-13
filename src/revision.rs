@@ -212,23 +212,25 @@ fn read_history(reader: impl std::io::Read, duration: f64) -> Result<TimingDraft
 }
 
 pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
-    save_history_with_publisher(dir, draft, |source, destination| {
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            use windows::{Win32::Storage::FileSystem::MoveFileW, core::PCWSTR};
-            let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-            let destination: Vec<u16> = destination
-                .as_os_str()
-                .encode_wide()
-                .chain(Some(0))
-                .collect();
-            unsafe { MoveFileW(PCWSTR(source.as_ptr()), PCWSTR(destination.as_ptr())) }?;
-        }
-        #[cfg(not(windows))]
-        fs::hard_link(source, destination)?;
-        Ok(())
-    })
+    save_history_with_publisher(dir, draft, publish_history)
+}
+
+fn publish_history(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{Win32::Storage::FileSystem::MoveFileW, core::PCWSTR};
+        let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        unsafe { MoveFileW(PCWSTR(source.as_ptr()), PCWSTR(destination.as_ptr())) }?;
+    }
+    #[cfg(not(windows))]
+    fs::hard_link(source, destination)?;
+    Ok(())
 }
 
 fn save_history_with_publisher(
@@ -456,6 +458,25 @@ mod timing_tests {
         assert!(read_history(&mut input, 5.0).is_err());
         assert_eq!(input.position(), LIMIT as u64 + 1);
     }
+    #[test]
+    #[cfg(windows)]
+    fn history_publication_moves_complete_bytes_without_replacing_a_racing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("complete.tmp");
+        let destination = dir.path().join("history.json");
+        fs::write(&source, b"complete history").unwrap();
+        publish_history(&source, &destination).unwrap();
+        assert!(
+            !source.exists(),
+            "Windows publication must consume the temporary name"
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"complete history");
+        fs::write(&source, b"other history").unwrap();
+        assert!(publish_history(&source, &destination).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"other history");
+        assert_eq!(fs::read(&destination).unwrap(), b"complete history");
+    }
+
     #[test]
     fn concurrent_history_publication_has_one_winner_and_no_temporary_files() {
         let dir = tempfile::tempdir().unwrap();
