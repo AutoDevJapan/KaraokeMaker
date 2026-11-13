@@ -212,6 +212,32 @@ fn read_history(reader: impl std::io::Read, duration: f64) -> Result<TimingDraft
 }
 
 pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
+    save_history_with_publisher(dir, draft, publish_history)
+}
+
+fn publish_history(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{Win32::Storage::FileSystem::MoveFileW, core::PCWSTR};
+        let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        unsafe { MoveFileW(PCWSTR(source.as_ptr()), PCWSTR(destination.as_ptr())) }?;
+    }
+    #[cfg(not(windows))]
+    fs::hard_link(source, destination)?;
+    Ok(())
+}
+
+fn save_history_with_publisher(
+    dir: &Path,
+    draft: &TimingDraft,
+    publish: impl FnOnce(&Path, &Path) -> Result<()>,
+) -> Result<()> {
     use std::io::Write;
     let json = draft.to_json()?;
     let temporary = dir.join(format!("timing-history-{}.tmp", uuid::Uuid::new_v4()));
@@ -222,12 +248,16 @@ pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
     let result = (|| -> Result<()> {
         file.write_all(json.as_bytes())?;
         file.sync_all()?;
+        drop(file);
         // Publish complete bytes atomically without replacing any existing file.
-        fs::hard_link(&temporary, dir.join("timing-history.json"))?;
+        publish(&temporary, &dir.join("timing-history.json"))?;
         Ok(())
     })();
-    drop(file);
-    history_save_result(result, &temporary, fs::remove_file(&temporary))
+    let cleanup = match fs::remove_file(&temporary) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && result.is_ok() => Ok(()),
+        other => other,
+    };
+    history_save_result(result, &temporary, cleanup)
 }
 
 fn history_save_result(
@@ -428,6 +458,75 @@ mod timing_tests {
         assert!(read_history(&mut input, 5.0).is_err());
         assert_eq!(input.position(), LIMIT as u64 + 1);
     }
+    #[test]
+    #[cfg(windows)]
+    fn history_publication_moves_complete_bytes_without_replacing_a_racing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("complete.tmp");
+        let destination = dir.path().join("history.json");
+        fs::write(&source, b"complete history").unwrap();
+        publish_history(&source, &destination).unwrap();
+        assert!(
+            !source.exists(),
+            "Windows publication must consume the temporary name"
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"complete history");
+        fs::write(&source, b"other history").unwrap();
+        assert!(publish_history(&source, &destination).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"other history");
+        assert_eq!(fs::read(&destination).unwrap(), b"complete history");
+    }
+
+    #[test]
+    fn concurrent_history_publication_has_one_winner_and_no_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for text in ["first", "second"] {
+                let barrier = barrier.clone();
+                let path = dir.path();
+                handles.push(scope.spawn(move || {
+                    let draft =
+                        TimingDraft::from_lrc(&format!("[00:01.00]{text}\n[00:02.00]\n"), 5.0)
+                            .unwrap();
+                    barrier.wait();
+                    (text, save_history_new(path, &draft).is_ok())
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|(_, success)| *success).count(), 1);
+        let winner = results.iter().find(|(_, success)| *success).unwrap().0;
+        assert_eq!(
+            load_history(dir.path(), 5.0).unwrap().unwrap().lines()[0].text,
+            winner
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn unsupported_history_publication_preserves_no_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        let error = save_history_with_publisher(dir.path(), &draft, |source, _| {
+            assert_eq!(
+                fs::read(source).unwrap(),
+                draft.to_json().unwrap().as_bytes()
+            );
+            Err(
+                std::io::Error::new(std::io::ErrorKind::Unsupported, "hard links unsupported")
+                    .into(),
+            )
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("hard links unsupported"));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
     #[test]
     fn history_cleanup_failure_retains_original_error_and_remaining_path() {
         let path = Path::new("remaining-history.tmp");
