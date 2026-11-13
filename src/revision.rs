@@ -212,6 +212,30 @@ fn read_history(reader: impl std::io::Read, duration: f64) -> Result<TimingDraft
 }
 
 pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
+    save_history_with_publisher(dir, draft, |source, destination| {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::{Win32::Storage::FileSystem::MoveFileW, core::PCWSTR};
+            let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+            let destination: Vec<u16> = destination
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            unsafe { MoveFileW(PCWSTR(source.as_ptr()), PCWSTR(destination.as_ptr())) }?;
+        }
+        #[cfg(not(windows))]
+        fs::hard_link(source, destination)?;
+        Ok(())
+    })
+}
+
+fn save_history_with_publisher(
+    dir: &Path,
+    draft: &TimingDraft,
+    publish: impl FnOnce(&Path, &Path) -> Result<()>,
+) -> Result<()> {
     use std::io::Write;
     let json = draft.to_json()?;
     let temporary = dir.join(format!("timing-history-{}.tmp", uuid::Uuid::new_v4()));
@@ -222,12 +246,16 @@ pub fn save_history_new(dir: &Path, draft: &TimingDraft) -> Result<()> {
     let result = (|| -> Result<()> {
         file.write_all(json.as_bytes())?;
         file.sync_all()?;
+        drop(file);
         // Publish complete bytes atomically without replacing any existing file.
-        fs::hard_link(&temporary, dir.join("timing-history.json"))?;
+        publish(&temporary, &dir.join("timing-history.json"))?;
         Ok(())
     })();
-    drop(file);
-    history_save_result(result, &temporary, fs::remove_file(&temporary))
+    let cleanup = match fs::remove_file(&temporary) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && result.is_ok() => Ok(()),
+        other => other,
+    };
+    history_save_result(result, &temporary, cleanup)
 }
 
 fn history_save_result(
@@ -428,6 +456,25 @@ mod timing_tests {
         assert!(read_history(&mut input, 5.0).is_err());
         assert_eq!(input.position(), LIMIT as u64 + 1);
     }
+    #[test]
+    fn unsupported_history_publication_preserves_no_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
+        let error = save_history_with_publisher(dir.path(), &draft, |source, _| {
+            assert_eq!(
+                fs::read(source).unwrap(),
+                draft.to_json().unwrap().as_bytes()
+            );
+            Err(
+                std::io::Error::new(std::io::ErrorKind::Unsupported, "hard links unsupported")
+                    .into(),
+            )
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("hard links unsupported"));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
     #[test]
     fn history_cleanup_failure_retains_original_error_and_remaining_path() {
         let path = Path::new("remaining-history.tmp");
