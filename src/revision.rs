@@ -457,6 +457,37 @@ mod timing_tests {
         assert_eq!(input.position(), LIMIT as u64 + 1);
     }
     #[test]
+    fn concurrent_history_publication_has_one_winner_and_no_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for text in ["first", "second"] {
+                let barrier = barrier.clone();
+                let path = dir.path();
+                handles.push(scope.spawn(move || {
+                    let draft =
+                        TimingDraft::from_lrc(&format!("[00:01.00]{text}\n[00:02.00]\n"), 5.0)
+                            .unwrap();
+                    barrier.wait();
+                    (text, save_history_new(path, &draft).is_ok())
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|(_, success)| *success).count(), 1);
+        let winner = results.iter().find(|(_, success)| *success).unwrap().0;
+        assert_eq!(
+            load_history(dir.path(), 5.0).unwrap().unwrap().lines()[0].text,
+            winner
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn unsupported_history_publication_preserves_no_partial_file() {
         let dir = tempfile::tempdir().unwrap();
         let draft = TimingDraft::from_lrc("[00:01.00]original\n[00:02.00]\n", 5.0).unwrap();
