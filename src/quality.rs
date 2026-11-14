@@ -43,7 +43,10 @@ pub fn measure(path: &Path) -> Result<AudioMetrics> {
     let mut power = vec![0.0f64; FFT / 2 + 1];
     let mut count = 0usize;
     for channel in 0..2 {
-        for start in (0..samples.saturating_sub(FFT)).step_by(2048) {
+        // Include a complete window whose end is exactly the end of the file.
+        // The range remains empty when there is no complete FFT window.
+        for end in (FFT..=samples).step_by(2048) {
+            let start = end - FFT;
             for i in 0..FFT {
                 time[i] = values[(start + i) * 2 + channel]
                     * (0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / FFT as f64).cos());
