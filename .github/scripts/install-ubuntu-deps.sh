@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Use one Ubuntu archive mirror with the distribution's existing signing keys.
+# Use bounded Ubuntu mirrors with the distribution's existing signing keys.
 # Keep the hosted runner's source files and third-party repositories unchanged.
 set -euo pipefail
 if (( $# == 0 )); then
@@ -22,10 +22,6 @@ keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 [[ -r "$keyring" ]] || { printf 'Ubuntu archive keyring is missing\n' >&2; exit 2; }
 sources="$(mktemp)"
 trap 'rm -- "$sources"' EXIT
-for pocket in '' -updates -security -backports; do
-  printf 'deb [signed-by=%s] https://mirrors.edge.kernel.org/ubuntu/ %s%s main restricted universe multiverse\n' \
-    "$keyring" "$VERSION_CODENAME" "$pocket" >> "$sources"
-done
 chmod 644 "$sources"
 apt_options=(
   -o "Dir::Etc::sourcelist=$sources"
@@ -37,8 +33,20 @@ apt_options=(
 )
 root=()
 if (( EUID != 0 )); then root=(sudo); fi
-printf 'Ubuntu dependency archive: %s, suite=%s, architecture=%s\n' \
-  'https://mirrors.edge.kernel.org/ubuntu/' "$VERSION_CODENAME" "$(dpkg --print-architecture)"
-timeout --kill-after=10s 180s "${root[@]}" apt-get "${apt_options[@]}" update
+updated=false
+for archive in https://mirrors.edge.kernel.org/ubuntu/ https://archive.ubuntu.com/ubuntu/; do
+  : > "$sources"
+  for pocket in '' -updates -security -backports; do
+    printf 'deb [signed-by=%s] %s %s%s main restricted universe multiverse\n' \
+      "$keyring" "$archive" "$VERSION_CODENAME" "$pocket" >> "$sources"
+  done
+  printf 'Ubuntu dependency archive: %s, suite=%s, architecture=%s\n' \
+    "$archive" "$VERSION_CODENAME" "$(dpkg --print-architecture)"
+  if timeout --kill-after=10s 180s "${root[@]}" apt-get "${apt_options[@]}" update; then
+    updated=true
+    break
+  fi
+done
+[[ "$updated" == true ]] || { printf 'All signed Ubuntu archive updates failed\n' >&2; exit 100; }
 timeout --kill-after=10s 600s "${root[@]}" apt-get "${apt_options[@]}" install --yes "$@"
 dpkg-query -W -f='${Package}\t${Version}\t${Status}\n' "$@"

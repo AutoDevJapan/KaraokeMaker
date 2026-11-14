@@ -33,6 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Check Windows history publication and failure cleanup
+        run: 'cargo test --locked --no-default-features --lib revision::timing_tests::'
       - run: cargo build --locked --release
       - name: Assemble and verify Windows package
         shell: pwsh
