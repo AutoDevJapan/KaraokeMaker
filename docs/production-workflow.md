@@ -90,8 +90,8 @@ karaoke-maker-cli --data ./work-data render ./edit/approved-instrumental.wav --o
 | --- | --- | --- |
 | 曲ごとの分離品質を判定した商用実績 | 購入前の比較試聴。提供伴奏優先、不合格は受注しない | [音源分離の評価](https://github.com/AutoDevJapan/KaraokeMaker/issues/2) |
 | 実曲全編の歌詞時刻と操作時間の検証 | 再生位置・行時刻・試聴・取り消しと再出力で確認する。実曲の±100ms精度や手作業15分目標は別に測定 | [歌詞編集画面](https://github.com/AutoDevJapan/KaraokeMaker/issues/3) |
-| 背景画像・ロゴ・配置を保存するテンプレート | 色・フォント・改行を案件別に指定。許可済み背景はFFmpegで準備 | [動画テンプレート](https://github.com/AutoDevJapan/KaraokeMaker/issues/4) |
-| 48kHz・納品検査の自動記録 | 48kHz標準、ピーク測定は実装済み。試聴・目視と商用基準は手動確認 | [納品の形式と検品](https://github.com/AutoDevJapan/KaraokeMaker/issues/5) |
+| 案件ごとの背景・字幕配置の検品 | [テンプレートCLI](templates.md)で画像・ロゴ・余白・行数・位置・手動回避領域を保存し、再出力できる。専用UIはなく、顔や配信先の表示との重なりは出力ごとに確認する | [動画テンプレート](https://github.com/AutoDevJapan/KaraokeMaker/issues/4) |
+| 納品物の全編試聴・目視と受け渡し確認 | CLIで44.1/48kHzを選べ、形式・長さ・容量・true peak・SHA-256を自動記録し、人手確認フォームも保存できる。自動検査は全編試聴・目視や権利確認を代替しない | [納品の形式と検品](https://github.com/AutoDevJapan/KaraokeMaker/issues/5) |
 
 2026-10-06の全作業再開指示に従い、出品案の相談を再開する。2026-10-04はADJの試用を優先し、出品と相談を止めていた（履歴）。本人曲への肯定的な返信とJIZURAの質問を受け取っている。受注開始には、権利確認済みサンプルでの全編試聴・字幕目視と制作時間の記録が必要。元の伴奏を提供してもらう案件でも、表示と納品の検品は省略しない。
 

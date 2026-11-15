@@ -79,7 +79,7 @@ cargo build --locked --release
 ./target/release/karaoke-maker-cli.exe --data ./data serve --port 19531 --no-open
 ```
 
-`--output` の中に処理ごとのフォルダを作り、既存の結果を上書きしません。映像を背景にする場合は `convert` に `--background` を付けます。`karaoke-maker-cli` はコマンドの結果を標準出力に表示し、デスクトップ用の実行ファイルはコンソールの窓を出しません。
+`--output` の中に処理ごとのフォルダを作り、既存の結果を上書きしません。元動画を背景に使う場合は `--background` を付けません。`convert` / `render` に `--background` を付けると、元動画の代わりにテンプレートの背景画像（指定時）または背景色を使います。`karaoke-maker-cli` はコマンドの結果を標準出力に表示し、デスクトップ用の実行ファイルはコンソールの窓を出しません。
 
 ```powershell
 cargo fmt --all -- --check
