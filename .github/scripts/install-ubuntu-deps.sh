@@ -32,8 +32,9 @@ apt_options=(
   -o Acquire::https::Timeout=15
 )
 root=()
-if (( EUID != 0 )); then root=(sudo); fi
+if (( EUID != 0 )); then root=(sudo -n --); fi
 downloaded=false
+# Wait for the APT lock holder to exit before switching mirrors.
 for archive in https://mirrors.edge.kernel.org/ubuntu/ https://archive.ubuntu.com/ubuntu/; do
   : > "$sources"
   for pocket in '' -updates -security -backports; do
@@ -42,11 +43,11 @@ for archive in https://mirrors.edge.kernel.org/ubuntu/ https://archive.ubuntu.co
   done
   printf 'Ubuntu dependency archive: %s, suite=%s, architecture=%s\n' \
     "$archive" "$VERSION_CODENAME" "$(dpkg --print-architecture)"
-  if ! timeout --kill-after=10s 180s "${root[@]}" apt-get "${apt_options[@]}" update; then
+  if ! "${root[@]}" timeout --foreground --kill-after=10s 180s apt-get "${apt_options[@]}" update; then
     printf 'Ubuntu archive index update failed: %s\n' "$archive" >&2
     continue
   fi
-  if timeout --kill-after=10s 600s "${root[@]}" apt-get "${apt_options[@]}" install --yes --download-only "$@"; then
+  if "${root[@]}" timeout --foreground --kill-after=10s 600s apt-get "${apt_options[@]}" install --yes --download-only "$@"; then
     downloaded=true
     break
   fi
@@ -55,5 +56,5 @@ done
 [[ "$downloaded" == true ]] || { printf 'All signed Ubuntu archives failed to provide the required packages\n' >&2; exit 100; }
 
 # Apply the downloaded packages once. Never retry an install that may have changed dpkg state.
-timeout --kill-after=10s 600s "${root[@]}" apt-get "${apt_options[@]}" install --yes --no-download "$@"
+"${root[@]}" timeout --kill-after=10s 600s apt-get "${apt_options[@]}" install --yes --no-download "$@"
 dpkg-query -W -f='${Package}\t${Version}\t${Status}\n' "$@"
